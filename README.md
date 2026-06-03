@@ -1,15 +1,17 @@
 # Email to WhatsApp Notification System
 
-A Python application that monitors your Gmail inbox and sends instant WhatsApp notifications when new emails arrive. Get real-time alerts on your phone for important emails without constantly checking your inbox.
+A Python application that monitors your Gmail inbox, sends email notifications first, and then sends WhatsApp notifications for new emails.
 
 ## Features
 
 - 📧 **Real-time Email Monitoring**: Connects to Gmail via IMAP and monitors for new unread emails
-- 📱 **Instant WhatsApp Notifications**: Sends immediate WhatsApp messages using pywhatkit
+- ✉️ **Email-First Notifications**: Sends notification emails to configured recipients before WhatsApp is attempted
+- 📱 **Reliable WhatsApp Notifications**: Sends WhatsApp Web messages with Selenium, a dedicated Chrome profile, and an explicit send-button click
 - 🔍 **Smart Filtering**: Filter emails by keywords, specific senders, or monitor all emails
 - ⚡ **Fast Detection**: Checks for new emails every 5 seconds by default
 - 📝 **Clean Message Format**: Well-formatted WhatsApp messages with sender, subject, and preview
-- 🛡️ **Delivery-aware Read Handling**: Uses BODY.PEEK while checking emails, then marks matching emails as read only after WhatsApp notification succeeds
+- 🛡️ **Delivery-aware Read Handling**: Uses BODY.PEEK while checking emails, then marks matching emails as read after WhatsApp succeeds or exhausts retries
+- 🔁 **Retry State**: Stores WhatsApp retry state in `notification_state.json` so notification emails are not duplicated
 - ⚙️ **Easy Configuration**: Environment-based configuration with .env file
 
 ## Prerequisites
@@ -17,7 +19,7 @@ A Python application that monitors your Gmail inbox and sends instant WhatsApp n
 - Python 3.7 or higher
 - Gmail account with App Password enabled (or other IMAP-enabled email)
 - WhatsApp Web access on your computer
-- Chrome browser (required by pywhatkit)
+- Chrome browser (required by Selenium WhatsApp Web automation)
 
 ## Installation
 
@@ -44,12 +46,26 @@ A Python application that monitors your Gmail inbox and sends instant WhatsApp n
    EMAIL_USERNAME=your_email@gmail.com
    EMAIL_PASSWORD=your_app_password
 
+   # Outbound Email Notification Configuration
+   NOTIFY_EMAIL_RECIPIENTS=alert_recipient@example.com
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=465
+   SMTP_USERNAME=  # Optional; defaults to EMAIL_USERNAME
+   SMTP_PASSWORD=  # Optional; defaults to EMAIL_PASSWORD
+   SMTP_FROM=      # Optional; defaults to SMTP_USERNAME/EMAIL_USERNAME
+
    # WhatsApp Configuration
    WHATSAPP_PHONE_NUMBER=+1234567890
+   WHATSAPP_GROUP_INVITE_CODE=  # Optional; full group invite URL or code overrides phone number
+   WHATSAPP_CHROME_PROFILE_DIR=.whatsapp_chrome_profile
+   WHATSAPP_MAX_RETRIES=3
+   WHATSAPP_RETRY_DELAY_SECONDS=300
 
    # Monitoring Settings
    CHECK_INTERVAL_MINUTES=0.083  # 5 seconds for real-time monitoring
    MAX_EMAILS_PER_CHECK=3  # Maximum unread emails to process per check
+   EMAIL_SCAN_MULTIPLIER=5  # Scan a wider unread window before applying filters
+   NOTIFICATION_DELAY_SECONDS=2
    KEYWORDS_TO_MONITOR=  # Leave empty to monitor all emails
    MONITOR_SPECIFIC_SENDERS=  # Leave empty to monitor all senders
    ```
@@ -73,9 +89,22 @@ For Gmail users, you need to:
 | `EMAIL_PORT` | IMAP server port | `993` |
 | `EMAIL_USERNAME` | Your email address | `user@gmail.com` |
 | `EMAIL_PASSWORD` | Email password or app password | `abcd efgh ijkl mnop` |
+| `NOTIFY_EMAIL_RECIPIENTS` | Comma-separated email notification recipients | `alerts@example.com,me@example.com` |
+| `SMTP_HOST` | Outbound SMTP host | `smtp.gmail.com` |
+| `SMTP_PORT` | Outbound SMTP SSL port | `465` |
+| `SMTP_USERNAME` | SMTP username; defaults to `EMAIL_USERNAME` | `user@gmail.com` |
+| `SMTP_PASSWORD` | SMTP password; defaults to `EMAIL_PASSWORD` | `abcd efgh ijkl mnop` |
+| `SMTP_FROM` | From address for notification emails | `user@gmail.com` |
 | `WHATSAPP_PHONE_NUMBER` | WhatsApp number with country code | `+1234567890` |
+| `WHATSAPP_GROUP_INVITE_CODE` | Optional group invite URL/code; when set, WhatsApp sends to the group instead of the phone number | `https://web.whatsapp.com/accept?code=...` |
+| `WHATSAPP_CHROME_PROFILE_DIR` | Dedicated Chrome profile for WhatsApp automation | `.whatsapp_chrome_profile` |
+| `WHATSAPP_WAIT_SECONDS` | Wait time for WhatsApp Web elements | `90` |
+| `WHATSAPP_MAX_RETRIES` | WhatsApp retry attempts after email notification succeeds | `3` |
+| `WHATSAPP_RETRY_DELAY_SECONDS` | Delay before retrying WhatsApp | `300` |
 | `CHECK_INTERVAL_MINUTES` | How often to check for emails (supports decimals) | `0.083` (5 seconds) |
 | `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
+| `EMAIL_SCAN_MULTIPLIER` | How many more unread candidates to scan before filtering | `5` |
+| `NOTIFICATION_DELAY_SECONDS` | Delay between notification attempts | `2` |
 | `KEYWORDS_TO_MONITOR` | Comma-separated keywords (leave empty for all emails) | `urgent,important` or empty |
 | `MONITOR_SPECIFIC_SENDERS` | Comma-separated email addresses (leave empty for all) | `boss@company.com` or empty |
 
@@ -101,23 +130,24 @@ python main.py --once
    - Keywords in subject or body (optional)
    - Specific sender addresses (optional)
    - Leave filters empty to monitor ALL emails
-4. **Batch Limiting**: Processes up to `MAX_EMAILS_PER_CHECK` of the most recent unread emails per check
-5. **Instant WhatsApp Notifications**: Sends clean, formatted messages with:
+4. **Wider Candidate Scan**: Scans up to `MAX_EMAILS_PER_CHECK * EMAIL_SCAN_MULTIPLIER` recent unread messages, then notifies up to `MAX_EMAILS_PER_CHECK`
+5. **Email Notification First**: Sends a notification email to `NOTIFY_EMAIL_RECIPIENTS`
+6. **WhatsApp Notification Second**: Sends clean, formatted WhatsApp messages with:
    - 📧 Email icon
    - Sender name and email
    - Subject line
    - Body preview (first 150 characters)
-6. **Read-state Update**: Marks matching emails as read only after their WhatsApp notification is sent successfully
-7. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
+7. **Retry-aware Read-state Update**: Marks matching emails as read after WhatsApp succeeds or exhausts configured retries
+8. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
 
 ## WhatsApp Integration Notes
 
-- **First Run**: WhatsApp Web will open in Chrome browser for authentication
+- **First Run**: WhatsApp Web will open in a dedicated Chrome profile for authentication
 - **QR Code**: Scan the QR code with your phone to link WhatsApp Web
 - **Stay Logged In**: Keep WhatsApp Web logged in for automatic sending
-- **Instant Delivery**: Uses `sendwhatmsg_instantly` for immediate message delivery
-- **Tab Behavior**: Keeps the WhatsApp tab open after sending, though PyWhatKit may still navigate or open WhatsApp Web for each message
-- **Rate Limiting**: 30-second delay between messages to avoid spam
+- **Profile Isolation**: The default profile directory is `.whatsapp_chrome_profile`, separate from your normal Chrome profile
+- **Send Button Click**: The script waits for WhatsApp Web, verifies the draft, clicks the real send button, and checks that the draft cleared
+- **Rate Limiting**: `NOTIFICATION_DELAY_SECONDS` controls the delay between messages
 
 ## Logging
 
@@ -139,12 +169,19 @@ The application creates detailed logs in:
    - Verify phone number format (+countrycode + number)
    - Ensure WhatsApp Web is logged in
    - Check Chrome browser is installed
+   - Close other Chrome windows using the same `WHATSAPP_CHROME_PROFILE_DIR`
+   - Increase `WHATSAPP_WAIT_SECONDS` if WhatsApp Web loads slowly
 
 3. **No Notifications Received**
    - Check if filters are too restrictive (try leaving them empty)
    - Verify emails are from today (system only checks today's emails)
    - Ensure emails are marked as "unread" in Gmail
    - Review logs for connection or filtering errors
+
+4. **Notification Emails Not Sending**
+   - Set `NOTIFY_EMAIL_RECIPIENTS`
+   - Confirm the Gmail app password works for SMTP
+   - Override `SMTP_USERNAME` and `SMTP_PASSWORD` if outbound SMTP differs from IMAP
 
 ### Debug Mode
 
@@ -180,6 +217,8 @@ Preview: Hi there, just wanted to remind you about our meeting scheduled for tom
 email-notification-on-WhatsApp/
 ├── main.py                 # Main application entry point
 ├── email_monitor.py        # Email monitoring and IMAP handling
+├── email_notification_sender.py # Outbound notification email handling
+├── notification_state.py    # Retry state persistence
 ├── whatsapp_sender.py      # WhatsApp message sending
 ├── config.py              # Configuration management
 ├── test_email_only.py     # Email detection testing script
@@ -206,7 +245,7 @@ You can extend the application by:
 - Requires Chrome browser for WhatsApp Web integration
 - WhatsApp Web must stay logged in for automatic sending
 - Limited to today's emails only (by design to avoid spam)
-- 30-second delay between messages to prevent WhatsApp rate limiting
+- WhatsApp automation depends on WhatsApp Web's current page structure
 
 ## Contributing
 

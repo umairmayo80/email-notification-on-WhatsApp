@@ -1,7 +1,7 @@
 import imaplib
 import email
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime
 from typing import List, Dict, Optional
 from email.header import decode_header
 from config import Config
@@ -28,11 +28,29 @@ class EmailMonitor:
         try:
             self.connection = imaplib.IMAP4_SSL(self.config.EMAIL_HOST, self.config.EMAIL_PORT)
             self.connection.login(self.config.EMAIL_USERNAME, self.config.EMAIL_PASSWORD)
-            self.connection.select('INBOX')
+            if not self.select_inbox():
+                return False
             self.logger.info("Successfully connected to email server")
             return True
         except Exception as e:
             self.logger.error(f"Failed to connect to email server: {str(e)}")
+            return False
+
+    def select_inbox(self) -> bool:
+        """Select INBOX before searches or mutations to recover from stale state."""
+        if not self.connection or not hasattr(self.connection, 'select'):
+            return True
+
+        try:
+            result = self.connection.select('INBOX')
+            status = result[0] if isinstance(result, tuple) else result
+            if status in ('OK', b'OK', None):
+                return True
+
+            self.logger.error("Failed to select INBOX")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error selecting INBOX: {str(e)}")
             return False
     
     def disconnect_from_email(self):
@@ -60,9 +78,11 @@ class EmailMonitor:
                     if not self.connect_to_email():
                         retry_count += 1
                         continue
+                elif not self.select_inbox():
+                    retry_count += 1
+                    continue
                 
                 # Search for unseen emails from today only to avoid processing too many emails
-                from datetime import date
                 today = date.today().strftime('%d-%b-%Y')
                 self.logger.info(f"Today's date for search: {today}")
                 search_criteria = f'UNSEEN SINCE {today}'
@@ -79,18 +99,21 @@ class EmailMonitor:
                 self.logger.info(f"Found {len(email_uids)} unseen emails total")
                 
                 max_emails = self.config.MAX_EMAILS_PER_CHECK
-                # Limit to the most recent emails to avoid overwhelming WhatsApp
-                email_uids = email_uids[-max_emails:] if len(email_uids) > max_emails else email_uids
-                email_uids.reverse()
+                scan_multiplier = getattr(self.config, 'EMAIL_SCAN_MULTIPLIER', 5)
+                scan_limit = max(max_emails, max_emails * scan_multiplier)
+                candidate_uids = email_uids[-scan_limit:] if len(email_uids) > scan_limit else email_uids
+                candidate_uids.reverse()
                 
                 new_emails = []
                 
-                for i, email_uid in enumerate(email_uids):
-                    self.logger.info(f"Processing email {i+1}/{len(email_uids)}")
+                for i, email_uid in enumerate(candidate_uids):
+                    self.logger.info(f"Processing email {i+1}/{len(candidate_uids)}")
                     email_data = self.fetch_email(email_uid)
                     if email_data and self.should_notify(email_data):
                         new_emails.append(email_data)
                         self.logger.info(f"Email matches notification criteria: {email_data['subject']}")
+                        if len(new_emails) >= max_emails:
+                            break
                     else:
                         if email_data:
                             self.logger.info(f"Email does not match criteria - Subject: '{email_data['subject']}', From: '{email_data['sender']}'")

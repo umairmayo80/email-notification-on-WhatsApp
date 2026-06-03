@@ -111,6 +111,10 @@ notifier.log
 # PyWhatKit database
 PyWhatKit_DB.txt
 
+# Runtime notification state and browser profile
+notification_state.json
+.whatsapp_chrome_profile/
+
 # IDE files
 .vscode/
 .idea/
