@@ -68,24 +68,24 @@ class EmailMonitor:
                 search_criteria = f'UNSEEN SINCE {today}'
                 
                 self.logger.info(f"Searching for emails with criteria: {search_criteria}")
-                status, messages = self.connection.search(None, search_criteria)
+                status, messages = self.connection.uid('SEARCH', None, 'UNSEEN', 'SINCE', today)
                 
                 if status != 'OK':
                     self.logger.error("Failed to search for emails")
                     retry_count += 1
                     continue
                 
-                email_ids = messages[0].split()
-                self.logger.info(f"Found {len(email_ids)} unseen emails total")
+                email_uids = messages[0].split()
+                self.logger.info(f"Found {len(email_uids)} unseen emails total")
                 
                 # Limit to most recent 3 emails to avoid overwhelming WhatsApp
-                email_ids = email_ids[-3:] if len(email_ids) > 3 else email_ids
+                email_uids = email_uids[-3:] if len(email_uids) > 3 else email_uids
                 
                 new_emails = []
                 
-                for i, email_id in enumerate(email_ids):
-                    self.logger.info(f"Processing email {i+1}/{len(email_ids)}")
-                    email_data = self.fetch_email(email_id)
+                for i, email_uid in enumerate(email_uids):
+                    self.logger.info(f"Processing email {i+1}/{len(email_uids)}")
+                    email_data = self.fetch_email(email_uid)
                     if email_data and self.should_notify(email_data):
                         new_emails.append(email_data)
                         self.logger.info(f"Email matches notification criteria: {email_data['subject']}")
@@ -136,7 +136,8 @@ class EmailMonitor:
     def fetch_email(self, email_id) -> Optional[Dict]:
         """Fetch and parse a specific email"""
         try:
-            status, msg_data = self.connection.fetch(email_id, '(BODY.PEEK[])')
+            email_uid = email_id.decode() if isinstance(email_id, bytes) else str(email_id)
+            status, msg_data = self.connection.uid('FETCH', email_uid, '(BODY.PEEK[])')
             
             if status != 'OK':
                 return None
@@ -153,7 +154,7 @@ class EmailMonitor:
             body = self.get_email_body(email_message)
             
             return {
-                'id': email_id.decode(),
+                'id': email_uid,
                 'subject': subject,
                 'sender': sender,
                 'date': date,
@@ -163,6 +164,27 @@ class EmailMonitor:
         except Exception as e:
             self.logger.error(f"Error fetching email {email_id}: {str(e)}")
             return None
+
+    def mark_email_as_seen(self, email_id: str) -> bool:
+        """Mark an email as seen after its notification has been sent."""
+        try:
+            if not self.connection:
+                self.logger.error("Cannot mark email as seen without an email connection")
+                return False
+
+            email_uid = str(email_id)
+            status, _ = self.connection.uid('STORE', email_uid, '+FLAGS.SILENT', r'(\Seen)')
+
+            if status == 'OK':
+                self.logger.info(f"Marked email UID {email_uid} as seen")
+                return True
+
+            self.logger.error(f"Failed to mark email UID {email_uid} as seen")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Error marking email {email_id} as seen: {str(e)}")
+            return False
     
     def get_email_body(self, email_message) -> str:
         """Extract and clean the body text from an email message"""

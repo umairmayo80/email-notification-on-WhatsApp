@@ -61,6 +61,10 @@ class EmailToWhatsAppNotifier:
                 
                 if self.whatsapp_sender.send_immediate_message(message):
                     self.logger.info(f"WhatsApp notification sent for email: {email_data['subject']}")
+                    if not self.email_monitor.mark_email_as_seen(email_data['id']):
+                        self.logger.warning(
+                            f"Email could not be marked as seen and may be retried: {email_data['subject']}"
+                        )
                 else:
                     self.logger.error(f"Failed to send WhatsApp notification for email: {email_data['subject']}")
                 

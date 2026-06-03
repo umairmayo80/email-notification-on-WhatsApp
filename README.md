@@ -9,7 +9,7 @@ A Python application that monitors your Gmail inbox and sends instant WhatsApp n
 - 🔍 **Smart Filtering**: Filter emails by keywords, specific senders, or monitor all emails
 - ⚡ **Fast Detection**: Checks for new emails every 5 seconds by default
 - 📝 **Clean Message Format**: Well-formatted WhatsApp messages with sender, subject, and preview
-- 🛡️ **Non-intrusive**: Uses BODY.PEEK to avoid marking emails as read during monitoring
+- 🛡️ **Delivery-aware Read Handling**: Uses BODY.PEEK while checking emails, then marks matching emails as read only after WhatsApp notification succeeds
 - ⚙️ **Easy Configuration**: Environment-based configuration with .env file
 
 ## Prerequisites
@@ -94,7 +94,7 @@ python main.py --once
 ## How It Works
 
 1. **Email Monitoring**: Connects to Gmail via IMAP and searches for unread emails from today
-2. **Non-intrusive Fetching**: Uses BODY.PEEK to read email content without marking as read
+2. **Delivery-aware Fetching**: Uses BODY.PEEK to read email content without marking as read before delivery
 3. **Smart Filtering**: Processes emails based on your criteria:
    - Keywords in subject or body (optional)
    - Specific sender addresses (optional)
@@ -104,7 +104,8 @@ python main.py --once
    - Sender name and email
    - Subject line
    - Body preview (first 150 characters)
-5. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
+5. **Read-state Update**: Marks matching emails as read only after their WhatsApp notification is sent successfully
+6. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
 
 ## WhatsApp Integration Notes
 
