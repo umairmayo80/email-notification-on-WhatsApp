@@ -228,6 +228,33 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertEqual(message['Subject'], 'Custom Alert: Project Match')
         self.assertTrue(message.get_content().startswith('Custom intro text.\n\n'))
 
+    def test_email_notification_flattens_newlines_in_headers(self):
+        sender = self.make_email_notification_sender()
+        sender.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX = 'Upwork\nAlert'
+        sender.config.NOTIFY_EMAIL_RECIPIENTS = ['recipient@example.com\r\n']
+        email = {
+            'subject': 'Great news! Your client approved java spring\n boot APIs',
+            'sender': 'Sender Name\n<sender@example.com>',
+            'date': 'Wed,\n 04 Jun 2026 03:52:00 +0500',
+            'body': 'Preview body',
+        }
+
+        message = sender._build_message(email)
+        content = message.get_content()
+
+        self.assertEqual(
+            message['Subject'],
+            'Upwork Alert: Great news! Your client approved java spring boot APIs',
+        )
+        self.assertNotIn('\n', message['Subject'])
+        self.assertNotIn('\r', message['Subject'])
+        self.assertEqual(message['To'], 'recipient@example.com')
+        self.assertIn('From: Sender Name <sender@example.com>', content)
+        self.assertIn(
+            'Subject: Great news! Your client approved java spring boot APIs',
+            content,
+        )
+
     def test_email_success_and_whatsapp_failure_queues_retry_without_resending_email(self):
         email = {
             'id': '456',

@@ -1,4 +1,5 @@
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 from typing import Dict
@@ -41,19 +42,24 @@ class EmailNotificationSender:
             return False
 
     def _build_message(self, email_data: Dict) -> EmailMessage:
-        subject = email_data.get('subject') or 'No Subject'
-        sender = email_data.get('sender') or 'Unknown Sender'
-        date = email_data.get('date') or 'Unknown Date'
+        subject = self._clean_header_value(email_data.get('subject')) or 'No Subject'
+        sender = self._clean_header_value(email_data.get('sender')) or 'Unknown Sender'
+        date = self._clean_header_value(email_data.get('date')) or 'Unknown Date'
         body = email_data.get('body') or ''
+        subject_prefix = (
+            self._clean_header_value(self.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX)
+            or 'Upwork Alert'
+        )
 
         notification = EmailMessage()
-        notification['From'] = self.config.SMTP_FROM
-        notification['To'] = ', '.join(self.config.NOTIFY_EMAIL_RECIPIENTS)
-        notification['Subject'] = (
-            f"{self.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX}: {subject}"
+        notification['From'] = self._clean_header_value(self.config.SMTP_FROM)
+        notification['To'] = ', '.join(
+            self._clean_header_value(recipient)
+            for recipient in self.config.NOTIFY_EMAIL_RECIPIENTS
         )
+        notification['Subject'] = f"{subject_prefix}: {subject}"
         notification.set_content(
-            f"{self.config.EMAIL_NOTIFICATION_BODY_INTRO}\n\n"
+            f"{self._clean_body_intro()}\n\n"
             f"From: {sender}\n"
             f"Subject: {subject}\n"
             f"Date: {date}\n\n"
@@ -61,3 +67,17 @@ class EmailNotificationSender:
         )
 
         return notification
+
+    @staticmethod
+    def _clean_header_value(value) -> str:
+        """Flatten a value so it is safe for RFC email headers."""
+        if value is None:
+            return ''
+
+        return re.sub(r'\s+', ' ', str(value).replace('\r', ' ').replace('\n', ' ')).strip()
+
+    def _clean_body_intro(self) -> str:
+        return (
+            self._clean_header_value(self.config.EMAIL_NOTIFICATION_BODY_INTRO)
+            or 'New Upwork alert matched your notification rule.'
+        )
