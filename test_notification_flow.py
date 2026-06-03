@@ -469,6 +469,54 @@ class TestNotificationFlow(unittest.TestCase):
 
         self.assertTrue(sender.validate_phone_number())
 
+    def test_draft_keyboard_fallback_strips_non_bmp_characters(self):
+        sender = self.make_whatsapp_sender()
+        test_case = self
+
+        class FakeComposeBox:
+            text = ''
+
+            def __init__(self):
+                self.sent_keys = []
+
+            def click(self):
+                pass
+
+            def get_attribute(self, name):
+                return self.text if name == 'innerText' else ''
+
+            def send_keys(self, *keys):
+                self.sent_keys.extend(keys)
+                for key in keys:
+                    if isinstance(key, str):
+                        test_case.assertTrue(all(ord(char) <= 0xFFFF for char in key))
+
+        class FakeDriver:
+            def execute_script(self, *args):
+                pass
+
+        compose_box = FakeComposeBox()
+        draft_message = sender._ensure_draft_message(
+            FakeDriver(),
+            compose_box,
+            '📧 New Email\nPreview',
+        )
+
+        self.assertEqual(draft_message, 'New Email\nPreview')
+        self.assertNotIn('📧', ''.join(compose_box.sent_keys))
+
+    def test_bmp_chromedriver_error_is_not_treated_as_fatal(self):
+        error = whatsapp_sender.WebDriverException(
+            'unknown error: ChromeDriver only supports characters in the BMP'
+        )
+
+        self.assertFalse(WhatsAppSender._is_fatal_driver_error(error))
+
+    def test_dead_browser_error_is_treated_as_fatal(self):
+        error = whatsapp_sender.WebDriverException('chrome not reachable')
+
+        self.assertTrue(WhatsAppSender._is_fatal_driver_error(error))
+
 
 if __name__ == '__main__':
     unittest.main()

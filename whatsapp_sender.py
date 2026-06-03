@@ -59,12 +59,12 @@ class WhatsAppSender:
             driver.get(self._build_chat_url(message))
 
             compose_box = self._wait_for_compose_box(driver)
-            self._ensure_draft_message(driver, compose_box, message)
+            draft_message = self._ensure_draft_message(driver, compose_box, message)
 
             for attempt in range(2):
                 self._click_send_button(driver)
                 time.sleep(1)
-                if self._message_left_draft(driver, message):
+                if self._message_left_draft(driver, draft_message):
                     self.logger.info("WhatsApp message sent and draft cleared")
                     return True
                 self.logger.warning("WhatsApp draft still present after send click; retrying click")
@@ -77,7 +77,8 @@ class WhatsAppSender:
             return False
         except WebDriverException as e:
             self.logger.error("WhatsApp browser automation failed: %s", str(e))
-            self.close()
+            if self._is_fatal_driver_error(e):
+                self.close()
             return False
         except Exception as e:
             self.logger.error("Failed to send WhatsApp message: %s", str(e))
@@ -157,10 +158,10 @@ class WhatsAppSender:
         visible_boxes = [box for box in boxes if box.is_displayed()]
         return visible_boxes[-1] if visible_boxes else False
 
-    def _ensure_draft_message(self, driver, compose_box, message: str):
+    def _ensure_draft_message(self, driver, compose_box, message: str) -> str:
         draft_text = self._element_text(compose_box)
         if self._normalize(message) in self._normalize(draft_text):
-            return
+            return message
 
         self.logger.info("WhatsApp URL did not populate the full draft; typing message")
         compose_box.click()
@@ -183,16 +184,28 @@ class WhatsAppSender:
 
         draft_text = self._element_text(compose_box)
         if self._normalize(message) in self._normalize(draft_text):
-            return
+            return message
+
+        safe_message = self._chromedriver_safe_text(message)
+        if safe_message != message:
+            self.logger.warning(
+                "Message contains characters ChromeDriver cannot type; "
+                "using keyboard-safe fallback text"
+            )
+
+        if not safe_message:
+            raise WebDriverException("Message cannot be typed by ChromeDriver")
 
         compose_box.send_keys(Keys.CONTROL, 'a')
         compose_box.send_keys(Keys.BACKSPACE)
-        lines = message.splitlines() or ['']
+        lines = safe_message.splitlines() or ['']
         for index, line in enumerate(lines):
             if line:
                 compose_box.send_keys(line)
             if index < len(lines) - 1:
                 compose_box.send_keys(Keys.SHIFT, Keys.ENTER)
+
+        return safe_message
 
     def _click_send_button(self, driver):
         wait = WebDriverWait(driver, self.config.WHATSAPP_WAIT_SECONDS)
@@ -230,6 +243,23 @@ class WhatsAppSender:
     @staticmethod
     def _normalize(value: Optional[str]) -> str:
         return ' '.join((value or '').split())
+
+    @staticmethod
+    def _chromedriver_safe_text(value: str) -> str:
+        """Remove non-BMP characters because ChromeDriver cannot send_keys them."""
+        return ''.join(char for char in value if ord(char) <= 0xFFFF).strip()
+
+    @staticmethod
+    def _is_fatal_driver_error(error: WebDriverException) -> bool:
+        message = str(error).lower()
+        fatal_markers = (
+            'chrome not reachable',
+            'disconnected',
+            'invalid session id',
+            'no such window',
+            'target window already closed',
+        )
+        return any(marker in message for marker in fatal_markers)
 
     def validate_phone_number(self) -> bool:
         """
