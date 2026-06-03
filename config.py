@@ -71,6 +71,17 @@ class Config:
     SMTP_PASSWORD = os.getenv('SMTP_PASSWORD') or EMAIL_PASSWORD
     SMTP_FROM = os.getenv('SMTP_FROM') or SMTP_USERNAME or EMAIL_USERNAME
     SMTP_TIMEOUT_SECONDS = get_positive_int_env('SMTP_TIMEOUT_SECONDS', 30)
+    EMAIL_NOTIFICATION_SUBJECT_PREFIX = (
+        os.getenv('EMAIL_NOTIFICATION_SUBJECT_PREFIX', 'Upwork Alert').strip()
+        or 'Upwork Alert'
+    )
+    EMAIL_NOTIFICATION_BODY_INTRO = (
+        os.getenv(
+            'EMAIL_NOTIFICATION_BODY_INTRO',
+            'New Upwork alert matched your notification rule.',
+        ).strip()
+        or 'New Upwork alert matched your notification rule.'
+    )
     
     # WhatsApp configuration
     WHATSAPP_PHONE_NUMBER = os.getenv('WHATSAPP_PHONE_NUMBER')  # Format: +1234567890
@@ -82,6 +93,7 @@ class Config:
     WHATSAPP_HEADLESS = get_bool_env('WHATSAPP_HEADLESS', False)
     WHATSAPP_HEADLESS_WINDOW_SIZE = os.getenv('WHATSAPP_HEADLESS_WINDOW_SIZE', '1280,900').strip()
     WHATSAPP_DEBUG_SCREENSHOT_DIR = os.getenv('WHATSAPP_DEBUG_SCREENSHOT_DIR', 'debug_screenshots').strip()
+    WHATSAPP_MESSAGE_HEADER = os.getenv('WHATSAPP_MESSAGE_HEADER', 'Upwork Alert').strip() or 'Upwork Alert'
     CHROME_BINARY_PATH = os.getenv('CHROME_BINARY_PATH')
     
     # Monitoring settings

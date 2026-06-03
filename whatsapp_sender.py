@@ -54,6 +54,11 @@ class WhatsAppSender:
             self.logger.error("selenium is not available")
             return False
 
+        message = self._sanitize_message_for_whatsapp(message)
+        if not message:
+            self.logger.error("WhatsApp message is empty after removing unsupported characters")
+            return False
+
         try:
             self.logger.info("Sending WhatsApp message through WhatsApp Web...")
             driver = self._get_driver()
@@ -303,6 +308,11 @@ class WhatsAppSender:
         """Remove non-BMP characters because ChromeDriver cannot send_keys them."""
         return ''.join(char for char in value if ord(char) <= 0xFFFF).strip()
 
+    @classmethod
+    def _sanitize_message_for_whatsapp(cls, value: str) -> str:
+        """Remove characters that ChromeDriver cannot type in fallback mode."""
+        return cls._chromedriver_safe_text(value)
+
     @staticmethod
     def _is_fatal_driver_error(error: WebDriverException) -> bool:
         message = str(error).lower()
@@ -340,19 +350,27 @@ class WhatsAppSender:
 
     def format_email_message(self, email_data: Dict) -> str:
         """Format email data into a clean WhatsApp message."""
-        subject = email_data.get('subject', 'No Subject')
-        sender = email_data.get('sender', 'Unknown Sender')
-        body = email_data.get('body', '')
+        subject = self._sanitize_message_for_whatsapp(
+            email_data.get('subject', 'No Subject')
+        ) or 'No Subject'
+        sender = self._sanitize_message_for_whatsapp(
+            email_data.get('sender', 'Unknown Sender')
+        ) or 'Unknown Sender'
+        body = self._sanitize_message_for_whatsapp(email_data.get('body', ''))
 
         if body:
             body = ' '.join(body.split())
             if len(body) > 150:
                 body = body[:150] + "..."
 
-        message = "📧 New Email\n\n"
+        header = self._sanitize_message_for_whatsapp(
+            getattr(self.config, 'WHATSAPP_MESSAGE_HEADER', 'Upwork Alert')
+        ) or 'Upwork Alert'
+
+        message = f"{header}\n\n"
         message += f"From: {sender}\n"
         message += f"Subject: {subject}\n"
         if body:
             message += f"\nPreview: {body}"
 
-        return message
+        return self._sanitize_message_for_whatsapp(message)

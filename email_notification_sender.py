@@ -49,9 +49,11 @@ class EmailNotificationSender:
         notification = EmailMessage()
         notification['From'] = self.config.SMTP_FROM
         notification['To'] = ', '.join(self.config.NOTIFY_EMAIL_RECIPIENTS)
-        notification['Subject'] = f"New email: {subject}"
+        notification['Subject'] = (
+            f"{self.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX}: {subject}"
+        )
         notification.set_content(
-            "A new email matched your notification rules.\n\n"
+            f"{self.config.EMAIL_NOTIFICATION_BODY_INTRO}\n\n"
             f"From: {sender}\n"
             f"Subject: {subject}\n"
             f"Date: {date}\n\n"

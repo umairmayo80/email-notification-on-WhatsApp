@@ -53,6 +53,8 @@ A Python application that monitors your Gmail inbox, sends email notifications f
    SMTP_USERNAME=  # Optional; defaults to EMAIL_USERNAME
    SMTP_PASSWORD=  # Optional; defaults to EMAIL_PASSWORD
    SMTP_FROM=      # Optional; defaults to SMTP_USERNAME/EMAIL_USERNAME
+   EMAIL_NOTIFICATION_SUBJECT_PREFIX=Upwork Alert
+   EMAIL_NOTIFICATION_BODY_INTRO=New Upwork alert matched your notification rule.
 
    # WhatsApp Configuration
    WHATSAPP_PHONE_NUMBER=+1234567890
@@ -64,6 +66,7 @@ A Python application that monitors your Gmail inbox, sends email notifications f
    WHATSAPP_HEADLESS=false
    WHATSAPP_HEADLESS_WINDOW_SIZE=1280,900
    WHATSAPP_DEBUG_SCREENSHOT_DIR=debug_screenshots
+   WHATSAPP_MESSAGE_HEADER=Upwork Alert
 
    # Monitoring Settings
    CHECK_INTERVAL_MINUTES=0.083  # 5 seconds for real-time monitoring
@@ -99,6 +102,8 @@ For Gmail users, you need to:
 | `SMTP_USERNAME` | SMTP username; defaults to `EMAIL_USERNAME` | `user@gmail.com` |
 | `SMTP_PASSWORD` | SMTP password; defaults to `EMAIL_PASSWORD` | `abcd efgh ijkl mnop` |
 | `SMTP_FROM` | From address for notification emails | `user@gmail.com` |
+| `EMAIL_NOTIFICATION_SUBJECT_PREFIX` | Prefix used for outbound notification email subjects | `Upwork Alert` |
+| `EMAIL_NOTIFICATION_BODY_INTRO` | First sentence in outbound notification email bodies | `New Upwork alert matched your notification rule.` |
 | `WHATSAPP_PHONE_NUMBER` | WhatsApp number with country code | `+1234567890` |
 | `WHATSAPP_GROUP_INVITE_CODE` | Optional group invite URL/code; when set, WhatsApp sends to the group instead of the phone number | `https://web.whatsapp.com/accept?code=...` |
 | `WHATSAPP_CHROME_PROFILE_DIR` | Dedicated Chrome profile for WhatsApp automation | `.whatsapp_chrome_profile` |
@@ -108,6 +113,7 @@ For Gmail users, you need to:
 | `WHATSAPP_HEADLESS` | Run Chrome without a visible browser window after WhatsApp Web is already authenticated | `false` |
 | `WHATSAPP_HEADLESS_WINDOW_SIZE` | Browser viewport size used in headless mode | `1280,900` |
 | `WHATSAPP_DEBUG_SCREENSHOT_DIR` | Directory for headless failure screenshots; leave empty to disable | `debug_screenshots` |
+| `WHATSAPP_MESSAGE_HEADER` | First line/title of each WhatsApp notification | `Upwork Alert` |
 | `CHECK_INTERVAL_MINUTES` | How often to check for emails (supports decimals) | `0.083` (5 seconds) |
 | `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
 | `EMAIL_SCAN_MULTIPLIER` | How many more unread candidates to scan before filtering | `5` |
@@ -214,7 +220,7 @@ For detailed debugging:
 When a new email is detected, you'll receive a WhatsApp message like this:
 
 ```
-📧 New Email
+Upwork Alert
 
 From: John Doe <john@example.com>
 Subject: Important Meeting Tomorrow

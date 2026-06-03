@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import config
 import whatsapp_sender
+from email_notification_sender import EmailNotificationSender
 from email_monitor import EmailMonitor
 from main import EmailToWhatsAppNotifier
 from notification_state import NotificationState
@@ -150,6 +151,23 @@ class TestNotificationFlow(unittest.TestCase):
         monitor.logger = logging.getLogger('test_email_monitor')
         return monitor
 
+    def make_email_notification_sender(self):
+        sender = EmailNotificationSender.__new__(EmailNotificationSender)
+        sender.config = type(
+            'TestEmailConfig',
+            (),
+            {
+                'SMTP_FROM': 'alerts@example.com',
+                'NOTIFY_EMAIL_RECIPIENTS': ['recipient@example.com'],
+                'EMAIL_NOTIFICATION_SUBJECT_PREFIX': 'Upwork Alert',
+                'EMAIL_NOTIFICATION_BODY_INTRO': (
+                    'New Upwork alert matched your notification rule.'
+                ),
+            },
+        )
+        sender.logger = logging.getLogger('test_email_notification_sender')
+        return sender
+
     def test_email_notification_is_sent_before_whatsapp(self):
         email = {
             'id': '123',
@@ -171,6 +189,44 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertEqual(email_monitor.marked_seen, ['123'])
         self.assertEqual(email_sender.sent_email_ids, ['123'])
         self.assertEqual(whatsapp_sender.sent_messages, ['Message for Important'])
+
+    def test_email_notification_message_uses_configured_subject_and_intro(self):
+        sender = self.make_email_notification_sender()
+        email = {
+            'subject': 'Testing Email Automation',
+            'sender': 'sender@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'Preview body',
+        }
+
+        message = sender._build_message(email)
+
+        self.assertEqual(
+            message['Subject'],
+            'Upwork Alert: Testing Email Automation',
+        )
+        self.assertTrue(
+            message.get_content().startswith(
+                'New Upwork alert matched your notification rule.\n\n'
+            )
+        )
+
+    def test_email_notification_message_allows_custom_subject_and_intro(self):
+        sender = self.make_email_notification_sender()
+        sender.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX = 'Custom Alert'
+        sender.config.EMAIL_NOTIFICATION_BODY_INTRO = 'Custom intro text.'
+
+        message = sender._build_message(
+            {
+                'subject': 'Project Match',
+                'sender': 'sender@example.com',
+                'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+                'body': 'Preview body',
+            }
+        )
+
+        self.assertEqual(message['Subject'], 'Custom Alert: Project Match')
+        self.assertTrue(message.get_content().startswith('Custom intro text.\n\n'))
 
     def test_email_success_and_whatsapp_failure_queues_retry_without_resending_email(self):
         email = {
@@ -416,6 +472,7 @@ class TestNotificationFlow(unittest.TestCase):
                 'WHATSAPP_HEADLESS': False,
                 'WHATSAPP_HEADLESS_WINDOW_SIZE': '1280,900',
                 'WHATSAPP_DEBUG_SCREENSHOT_DIR': 'debug_screenshots',
+                'WHATSAPP_MESSAGE_HEADER': 'Upwork Alert',
                 'CHROME_BINARY_PATH': None,
             },
         )
@@ -584,6 +641,47 @@ class TestNotificationFlow(unittest.TestCase):
 
         self.assertEqual(draft_message, 'New Email\nPreview')
         self.assertNotIn('📧', ''.join(compose_box.sent_keys))
+
+    def test_format_email_message_removes_non_bmp_characters(self):
+        sender = self.make_whatsapp_sender()
+
+        message = sender.format_email_message(
+            {
+                'subject': 'Testing 🚀',
+                'sender': 'Sender 😀 <sender@example.com>',
+                'body': 'Body with 📧 emoji',
+            }
+        )
+
+        self.assertIn('Upwork Alert', message)
+        self.assertIn('Testing', message)
+        self.assertIn('Sender  <sender@example.com>', message)
+        self.assertIn('Body with emoji', message)
+        self.assertNotIn('📧', message)
+        self.assertTrue(all(ord(char) <= 0xFFFF for char in message))
+
+    def test_format_email_message_uses_configured_header(self):
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_MESSAGE_HEADER = 'Custom Header 🚀'
+
+        message = sender.format_email_message(
+            {
+                'subject': 'Testing',
+                'sender': 'sender@example.com',
+                'body': 'Body',
+            }
+        )
+
+        self.assertTrue(message.startswith('Custom Header\n\n'))
+        self.assertNotIn('🚀', message)
+
+    def test_sanitize_message_for_whatsapp_removes_non_bmp_characters(self):
+        sender = self.make_whatsapp_sender()
+
+        self.assertEqual(
+            sender._sanitize_message_for_whatsapp('Hello 📧 there 🚀'),
+            'Hello  there',
+        )
 
     def test_bmp_chromedriver_error_is_not_treated_as_fatal(self):
         error = whatsapp_sender.WebDriverException(
