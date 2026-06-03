@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime
 from typing import Dict, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -70,18 +71,22 @@ class WhatsAppSender:
                 self.logger.warning("WhatsApp draft still present after send click; retrying click")
 
             self.logger.error("WhatsApp message appears to be stuck in the draft box")
+            self._capture_debug_screenshot(driver, 'draft-stuck')
             return False
 
         except TimeoutException:
             self.logger.error("Timed out waiting for WhatsApp Web to become ready")
+            self._capture_debug_screenshot(self.driver, 'timeout')
             return False
         except WebDriverException as e:
             self.logger.error("WhatsApp browser automation failed: %s", str(e))
+            self._capture_debug_screenshot(self.driver, 'webdriver-error')
             if self._is_fatal_driver_error(e):
                 self.close()
             return False
         except Exception as e:
             self.logger.error("Failed to send WhatsApp message: %s", str(e))
+            self._capture_debug_screenshot(self.driver, 'unexpected-error')
             return False
 
     def send_immediate_message(self, message: str) -> bool:
@@ -118,12 +123,61 @@ class WhatsAppSender:
         options.add_argument("--profile-directory=Default")
         options.add_argument("--no-first-run")
         options.add_argument("--disable-popup-blocking")
-        options.add_argument("--start-maximized")
+
+        if self.config.WHATSAPP_HEADLESS:
+            options.add_argument("--headless=new")
+            options.add_argument(f"--window-size={self._headless_window_size()}")
+        else:
+            options.add_argument("--start-maximized")
 
         if self.config.CHROME_BINARY_PATH:
             options.binary_location = self.config.CHROME_BINARY_PATH
 
         return options
+
+    def _headless_window_size(self) -> str:
+        configured_size = getattr(self.config, 'WHATSAPP_HEADLESS_WINDOW_SIZE', '')
+        normalized = configured_size.lower().replace('x', ',')
+        parts = [part.strip() for part in normalized.split(',') if part.strip()]
+
+        if len(parts) != 2:
+            return '1280,900'
+
+        try:
+            width, height = (int(parts[0]), int(parts[1]))
+        except ValueError:
+            return '1280,900'
+
+        if width <= 0 or height <= 0:
+            return '1280,900'
+
+        return f"{width},{height}"
+
+    def _capture_debug_screenshot(self, driver, reason: str) -> Optional[str]:
+        if not getattr(self.config, 'WHATSAPP_HEADLESS', False):
+            return None
+
+        screenshot_dir = getattr(self.config, 'WHATSAPP_DEBUG_SCREENSHOT_DIR', '').strip()
+        if not screenshot_dir or not driver:
+            return None
+
+        try:
+            os.makedirs(screenshot_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            safe_reason = ''.join(
+                char if char.isalnum() or char in ('-', '_') else '-'
+                for char in reason
+            ).strip('-') or 'failure'
+            screenshot_path = os.path.join(
+                screenshot_dir,
+                f"whatsapp-{safe_reason}-{timestamp}.png",
+            )
+            driver.save_screenshot(screenshot_path)
+            self.logger.info("Saved WhatsApp debug screenshot: %s", screenshot_path)
+            return screenshot_path
+        except Exception as e:
+            self.logger.warning("Could not save WhatsApp debug screenshot: %s", str(e))
+            return None
 
     def _build_chat_url(self, message: str) -> str:
         group_code = self._get_group_invite_code()

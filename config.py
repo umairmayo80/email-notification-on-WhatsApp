@@ -11,6 +11,21 @@ def get_list_env(name: str):
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
+def get_bool_env(name: str, default: bool = False) -> bool:
+    """Read a boolean environment variable with a safe default."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in ('1', 'true', 'yes', 'y', 'on'):
+        return True
+    if normalized in ('0', 'false', 'no', 'n', 'off'):
+        return False
+
+    return default
+
+
 def get_positive_int_env(name: str, default: int) -> int:
     """Read a positive integer from the environment with a safe default."""
     try:
@@ -64,6 +79,9 @@ class Config:
     WHATSAPP_WAIT_SECONDS = get_positive_int_env('WHATSAPP_WAIT_SECONDS', 90)
     WHATSAPP_MAX_RETRIES = get_positive_int_env('WHATSAPP_MAX_RETRIES', 3)
     WHATSAPP_RETRY_DELAY_SECONDS = get_non_negative_int_env('WHATSAPP_RETRY_DELAY_SECONDS', 300)
+    WHATSAPP_HEADLESS = get_bool_env('WHATSAPP_HEADLESS', False)
+    WHATSAPP_HEADLESS_WINDOW_SIZE = os.getenv('WHATSAPP_HEADLESS_WINDOW_SIZE', '1280,900').strip()
+    WHATSAPP_DEBUG_SCREENSHOT_DIR = os.getenv('WHATSAPP_DEBUG_SCREENSHOT_DIR', 'debug_screenshots').strip()
     CHROME_BINARY_PATH = os.getenv('CHROME_BINARY_PATH')
     
     # Monitoring settings

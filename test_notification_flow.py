@@ -5,6 +5,7 @@ import unittest
 import warnings
 from unittest.mock import patch
 
+import config
 import whatsapp_sender
 from email_monitor import EmailMonitor
 from main import EmailToWhatsAppNotifier
@@ -412,6 +413,9 @@ class TestNotificationFlow(unittest.TestCase):
                 'WHATSAPP_GROUP_INVITE_CODE': '',
                 'WHATSAPP_CHROME_PROFILE_DIR': '.whatsapp_chrome_profile',
                 'WHATSAPP_WAIT_SECONDS': 1,
+                'WHATSAPP_HEADLESS': False,
+                'WHATSAPP_HEADLESS_WINDOW_SIZE': '1280,900',
+                'WHATSAPP_DEBUG_SCREENSHOT_DIR': 'debug_screenshots',
                 'CHROME_BINARY_PATH': None,
             },
         )
@@ -428,6 +432,82 @@ class TestNotificationFlow(unittest.TestCase):
         options = sender._build_chrome_options()
 
         self.assertIn(f"--user-data-dir={os.path.abspath(temp_dir.name)}", options.arguments)
+
+    def test_bool_env_parsing_accepts_true_and_false_values(self):
+        with patch.dict(os.environ, {'TEST_BOOL': 'yes'}):
+            self.assertTrue(config.get_bool_env('TEST_BOOL'))
+
+        with patch.dict(os.environ, {'TEST_BOOL': 'off'}):
+            self.assertFalse(config.get_bool_env('TEST_BOOL', default=True))
+
+        with patch.dict(os.environ, {'TEST_BOOL': 'not-a-bool'}):
+            self.assertTrue(config.get_bool_env('TEST_BOOL', default=True))
+
+    def test_headed_chrome_options_do_not_include_headless_flags(self):
+        sender = self.make_whatsapp_sender()
+
+        options = sender._build_chrome_options()
+
+        self.assertNotIn('--headless=new', options.arguments)
+        self.assertNotIn('--window-size=1280,900', options.arguments)
+        self.assertIn('--start-maximized', options.arguments)
+        self.assertIn('--profile-directory=Default', options.arguments)
+
+    def test_headless_chrome_options_include_headless_window_and_profile(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_HEADLESS = True
+        sender.config.WHATSAPP_HEADLESS_WINDOW_SIZE = '1440,1000'
+        sender.config.WHATSAPP_CHROME_PROFILE_DIR = temp_dir.name
+
+        options = sender._build_chrome_options()
+
+        self.assertIn('--headless=new', options.arguments)
+        self.assertIn('--window-size=1440,1000', options.arguments)
+        self.assertNotIn('--start-maximized', options.arguments)
+        self.assertIn(f"--user-data-dir={os.path.abspath(temp_dir.name)}", options.arguments)
+        self.assertIn('--profile-directory=Default', options.arguments)
+
+    def test_invalid_headless_window_size_uses_default(self):
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_HEADLESS_WINDOW_SIZE = 'wide,tall'
+
+        self.assertEqual(sender._headless_window_size(), '1280,900')
+
+    def test_debug_screenshot_is_saved_only_in_headless_mode(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_DEBUG_SCREENSHOT_DIR = temp_dir.name
+        screenshot_calls = []
+
+        class FakeDriver:
+            def save_screenshot(self, path):
+                screenshot_calls.append(path)
+                with open(path, 'wb') as screenshot:
+                    screenshot.write(b'fake image')
+                return True
+
+        headed_result = sender._capture_debug_screenshot(FakeDriver(), 'headed-failure')
+        sender.config.WHATSAPP_HEADLESS = True
+        headless_result = sender._capture_debug_screenshot(FakeDriver(), 'headless-failure')
+
+        self.assertIsNone(headed_result)
+        self.assertIsNotNone(headless_result)
+        self.assertEqual(len(screenshot_calls), 1)
+        self.assertTrue(os.path.exists(screenshot_calls[0]))
+
+    def test_debug_screenshot_skips_empty_directory(self):
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_HEADLESS = True
+        sender.config.WHATSAPP_DEBUG_SCREENSHOT_DIR = ''
+
+        class FakeDriver:
+            def save_screenshot(self, path):
+                raise AssertionError('save_screenshot should not be called')
+
+        self.assertIsNone(sender._capture_debug_screenshot(FakeDriver(), 'failure'))
 
     def test_click_send_button_clicks_real_button(self):
         sender = self.make_whatsapp_sender()

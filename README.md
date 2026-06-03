@@ -58,8 +58,12 @@ A Python application that monitors your Gmail inbox, sends email notifications f
    WHATSAPP_PHONE_NUMBER=+1234567890
    WHATSAPP_GROUP_INVITE_CODE=  # Optional; full group invite URL or code overrides phone number
    WHATSAPP_CHROME_PROFILE_DIR=.whatsapp_chrome_profile
+   WHATSAPP_WAIT_SECONDS=90
    WHATSAPP_MAX_RETRIES=3
    WHATSAPP_RETRY_DELAY_SECONDS=300
+   WHATSAPP_HEADLESS=false
+   WHATSAPP_HEADLESS_WINDOW_SIZE=1280,900
+   WHATSAPP_DEBUG_SCREENSHOT_DIR=debug_screenshots
 
    # Monitoring Settings
    CHECK_INTERVAL_MINUTES=0.083  # 5 seconds for real-time monitoring
@@ -101,6 +105,9 @@ For Gmail users, you need to:
 | `WHATSAPP_WAIT_SECONDS` | Wait time for WhatsApp Web elements | `90` |
 | `WHATSAPP_MAX_RETRIES` | WhatsApp retry attempts after email notification succeeds | `3` |
 | `WHATSAPP_RETRY_DELAY_SECONDS` | Delay before retrying WhatsApp | `300` |
+| `WHATSAPP_HEADLESS` | Run Chrome without a visible browser window after WhatsApp Web is already authenticated | `false` |
+| `WHATSAPP_HEADLESS_WINDOW_SIZE` | Browser viewport size used in headless mode | `1280,900` |
+| `WHATSAPP_DEBUG_SCREENSHOT_DIR` | Directory for headless failure screenshots; leave empty to disable | `debug_screenshots` |
 | `CHECK_INTERVAL_MINUTES` | How often to check for emails (supports decimals) | `0.083` (5 seconds) |
 | `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
 | `EMAIL_SCAN_MULTIPLIER` | How many more unread candidates to scan before filtering | `5` |
@@ -146,6 +153,8 @@ python main.py --once
 - **QR Code**: Scan the QR code with your phone to link WhatsApp Web
 - **Stay Logged In**: Keep WhatsApp Web logged in for automatic sending
 - **Profile Isolation**: The default profile directory is `.whatsapp_chrome_profile`, separate from your normal Chrome profile
+- **Headless Mode**: Keep `WHATSAPP_HEADLESS=false` until WhatsApp Web is linked, then set it to `true` for unattended runs
+- **Debug Screenshots**: In headless mode, WhatsApp failures save screenshots to `WHATSAPP_DEBUG_SCREENSHOT_DIR`
 - **Send Button Click**: The script waits for WhatsApp Web, verifies the draft, clicks the real send button, and checks that the draft cleared
 - **Rate Limiting**: `NOTIFICATION_DELAY_SECONDS` controls the delay between messages
 
@@ -171,6 +180,7 @@ The application creates detailed logs in:
    - Check Chrome browser is installed
    - Close other Chrome windows using the same `WHATSAPP_CHROME_PROFILE_DIR`
    - Increase `WHATSAPP_WAIT_SECONDS` if WhatsApp Web loads slowly
+   - If headless mode fails, check `WHATSAPP_DEBUG_SCREENSHOT_DIR`, then switch `WHATSAPP_HEADLESS=false` to re-authenticate
 
 3. **No Notifications Received**
    - Check if filters are too restrictive (try leaving them empty)
@@ -188,6 +198,7 @@ The application creates detailed logs in:
 For detailed debugging:
 - Check `email_monitor.log` for email detection issues
 - Check `notifier.log` for WhatsApp sending issues
+- Check headless WhatsApp screenshots in `debug_screenshots/` when enabled
 - Use `python test_email_only.py` to test email detection without WhatsApp
 - Run `python main.py --once` for single-run testing
 
