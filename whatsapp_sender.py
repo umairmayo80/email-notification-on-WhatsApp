@@ -39,7 +39,7 @@ class WhatsAppSender:
                     phone_no=self.config.WHATSAPP_PHONE_NUMBER,
                     message=message,
                     wait_time=10,  # Wait time for WhatsApp Web to load
-                    tab_close=True  # Close the tab after sending
+                    tab_close=False  # Keep WhatsApp Web open after sending
                 )
                 self.logger.info("WhatsApp message sent instantly!")
                 return True
@@ -60,7 +60,7 @@ class WhatsAppSender:
                     time_hour=hour,
                     time_min=minute,
                     wait_time=15,
-                    tab_close=True
+                    tab_close=False
                 )
                 
                 self.logger.info(f"WhatsApp message scheduled for {hour:02d}:{minute:02d}")

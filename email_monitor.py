@@ -78,8 +78,10 @@ class EmailMonitor:
                 email_uids = messages[0].split()
                 self.logger.info(f"Found {len(email_uids)} unseen emails total")
                 
-                # Limit to most recent 3 emails to avoid overwhelming WhatsApp
-                email_uids = email_uids[-3:] if len(email_uids) > 3 else email_uids
+                max_emails = self.config.MAX_EMAILS_PER_CHECK
+                # Limit to the most recent emails to avoid overwhelming WhatsApp
+                email_uids = email_uids[-max_emails:] if len(email_uids) > max_emails else email_uids
+                email_uids.reverse()
                 
                 new_emails = []
                 

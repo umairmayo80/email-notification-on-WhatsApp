@@ -49,6 +49,7 @@ A Python application that monitors your Gmail inbox and sends instant WhatsApp n
 
    # Monitoring Settings
    CHECK_INTERVAL_MINUTES=0.083  # 5 seconds for real-time monitoring
+   MAX_EMAILS_PER_CHECK=3  # Maximum unread emails to process per check
    KEYWORDS_TO_MONITOR=  # Leave empty to monitor all emails
    MONITOR_SPECIFIC_SENDERS=  # Leave empty to monitor all senders
    ```
@@ -74,6 +75,7 @@ For Gmail users, you need to:
 | `EMAIL_PASSWORD` | Email password or app password | `abcd efgh ijkl mnop` |
 | `WHATSAPP_PHONE_NUMBER` | WhatsApp number with country code | `+1234567890` |
 | `CHECK_INTERVAL_MINUTES` | How often to check for emails (supports decimals) | `0.083` (5 seconds) |
+| `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
 | `KEYWORDS_TO_MONITOR` | Comma-separated keywords (leave empty for all emails) | `urgent,important` or empty |
 | `MONITOR_SPECIFIC_SENDERS` | Comma-separated email addresses (leave empty for all) | `boss@company.com` or empty |
 
@@ -99,13 +101,14 @@ python main.py --once
    - Keywords in subject or body (optional)
    - Specific sender addresses (optional)
    - Leave filters empty to monitor ALL emails
-4. **Instant WhatsApp Notifications**: Sends clean, formatted messages with:
+4. **Batch Limiting**: Processes up to `MAX_EMAILS_PER_CHECK` of the most recent unread emails per check
+5. **Instant WhatsApp Notifications**: Sends clean, formatted messages with:
    - 📧 Email icon
    - Sender name and email
    - Subject line
    - Body preview (first 150 characters)
-5. **Read-state Update**: Marks matching emails as read only after their WhatsApp notification is sent successfully
-6. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
+6. **Read-state Update**: Marks matching emails as read only after their WhatsApp notification is sent successfully
+7. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
 
 ## WhatsApp Integration Notes
 
@@ -113,7 +116,7 @@ python main.py --once
 - **QR Code**: Scan the QR code with your phone to link WhatsApp Web
 - **Stay Logged In**: Keep WhatsApp Web logged in for automatic sending
 - **Instant Delivery**: Uses `sendwhatmsg_instantly` for immediate message delivery
-- **Auto-close**: Browser tab closes automatically after sending
+- **Tab Behavior**: Keeps the WhatsApp tab open after sending, though PyWhatKit may still navigate or open WhatsApp Web for each message
 - **Rate Limiting**: 30-second delay between messages to avoid spam
 
 ## Logging
