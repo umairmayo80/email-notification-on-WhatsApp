@@ -46,11 +46,35 @@ class NotificationState:
         entry = self.get(email_id)
         return bool(entry and entry.get('email_sent'))
 
-    def record_email_sent(self, email_data: Dict, message: str):
+    def record_email_sent(
+        self,
+        email_data: Dict,
+        message: str,
+        alert_type: str = 'legacy',
+        whatsapp_recipient: Optional[str] = None,
+    ):
         email_id = str(email_data['id'])
-        entry = self._entry(email_id, email_data, message)
+        entry = self._entry(email_id, email_data, message, alert_type, whatsapp_recipient)
+        entry['email_required'] = True
         entry['email_sent'] = True
         entry['email_sent_at'] = entry.get('email_sent_at') or self._now_iso()
+        entry.setdefault('status', 'queued')
+        entry.setdefault('attempt_count', 0)
+        entry.setdefault('next_attempt_at', None)
+        self.save()
+
+    def record_whatsapp_queued(
+        self,
+        email_data: Dict,
+        message: str,
+        alert_type: str = 'legacy',
+        whatsapp_recipient: Optional[str] = None,
+        email_required: bool = True,
+    ):
+        email_id = str(email_data['id'])
+        entry = self._entry(email_id, email_data, message, alert_type, whatsapp_recipient)
+        entry['email_required'] = email_required
+        entry.setdefault('email_sent', False)
         entry.setdefault('status', 'queued')
         entry.setdefault('attempt_count', 0)
         entry.setdefault('next_attempt_at', None)
@@ -84,10 +108,12 @@ class NotificationState:
         max_retries: int,
         retry_delay_seconds: int,
         error: Optional[str] = None,
+        alert_type: Optional[str] = None,
+        whatsapp_recipient: Optional[str] = None,
     ) -> Dict:
         email_id = str(email_data['id'])
         now = self._now()
-        entry = self._entry(email_id, email_data, message)
+        entry = self._entry(email_id, email_data, message, alert_type, whatsapp_recipient)
         attempt_count = int(entry.get('attempt_count', 0)) + 1
 
         entry['attempt_count'] = attempt_count
@@ -125,7 +151,7 @@ class NotificationState:
         due_notifications = []
 
         for email_id, entry in self.data.get('notifications', {}).items():
-            if not entry.get('email_sent'):
+            if entry.get('email_required', True) and not entry.get('email_sent'):
                 continue
             if entry.get('status') in ('sent', 'exhausted'):
                 continue
@@ -137,7 +163,14 @@ class NotificationState:
 
         return due_notifications
 
-    def _entry(self, email_id: str, email_data: Dict, message: str) -> Dict:
+    def _entry(
+        self,
+        email_id: str,
+        email_data: Dict,
+        message: str,
+        alert_type: Optional[str] = None,
+        whatsapp_recipient: Optional[str] = None,
+    ) -> Dict:
         notifications = self.data.setdefault('notifications', {})
         entry = notifications.setdefault(
             email_id,
@@ -149,6 +182,10 @@ class NotificationState:
         )
         entry['email_data'] = email_data
         entry['message'] = message
+        if alert_type:
+            entry['alert_type'] = alert_type
+        if whatsapp_recipient is not None:
+            entry['whatsapp_recipient'] = whatsapp_recipient
         return entry
 
     def _now_iso(self) -> str:

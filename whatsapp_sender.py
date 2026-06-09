@@ -40,7 +40,12 @@ class WhatsAppSender:
         self.logger = logging.getLogger(__name__)
         self.driver = None
 
-    def send_message(self, message: str, instant: bool = True) -> bool:
+    def send_message(
+        self,
+        message: str,
+        instant: bool = True,
+        recipient: Optional[str] = None,
+    ) -> bool:
         """
         Send a WhatsApp message with Selenium and a dedicated Chrome profile.
 
@@ -62,7 +67,7 @@ class WhatsAppSender:
         try:
             self.logger.info("Sending WhatsApp message through WhatsApp Web...")
             driver = self._get_driver()
-            driver.get(self._build_chat_url(message))
+            driver.get(self._build_chat_url(message, recipient=recipient))
 
             compose_box = self._wait_for_compose_box(driver)
             draft_message = self._ensure_draft_message(driver, compose_box, message)
@@ -94,9 +99,9 @@ class WhatsAppSender:
             self._capture_debug_screenshot(self.driver, 'unexpected-error')
             return False
 
-    def send_immediate_message(self, message: str) -> bool:
+    def send_immediate_message(self, message: str, recipient: Optional[str] = None) -> bool:
         """Send a WhatsApp message immediately."""
-        return self.send_message(message, instant=True)
+        return self.send_message(message, instant=True, recipient=recipient)
 
     def close(self):
         """Close the Selenium browser when the application stops."""
@@ -184,16 +189,27 @@ class WhatsAppSender:
             self.logger.warning("Could not save WhatsApp debug screenshot: %s", str(e))
             return None
 
-    def _build_chat_url(self, message: str) -> str:
+    def _build_chat_url(self, message: str, recipient: Optional[str] = None) -> str:
+        recipient = (recipient or '').strip()
+        if recipient:
+            if self._is_phone_recipient(recipient):
+                phone = self._phone_digits(recipient)
+                return f"https://web.whatsapp.com/send?phone={phone}&text={quote(message)}"
+
+            group_code = self._get_group_invite_code(recipient)
+            return f"https://web.whatsapp.com/accept?code={quote(group_code)}"
+
         group_code = self._get_group_invite_code()
         if group_code:
             return f"https://web.whatsapp.com/accept?code={quote(group_code)}"
 
-        phone = ''.join(char for char in (self.config.WHATSAPP_PHONE_NUMBER or '') if char.isdigit())
+        phone = self._phone_digits(self.config.WHATSAPP_PHONE_NUMBER or '')
         return f"https://web.whatsapp.com/send?phone={phone}&text={quote(message)}"
 
-    def _get_group_invite_code(self) -> str:
-        raw_code = getattr(self.config, 'WHATSAPP_GROUP_INVITE_CODE', '').strip()
+    def _get_group_invite_code(self, raw_code: Optional[str] = None) -> str:
+        if raw_code is None:
+            raw_code = getattr(self.config, 'WHATSAPP_GROUP_INVITE_CODE', '')
+        raw_code = (raw_code or '').strip()
         if not raw_code:
             return ''
 
@@ -207,6 +223,28 @@ class WhatsAppSender:
             return path_parts[-1].strip()
 
         return raw_code.rstrip('/').split('/')[-1].strip()
+
+    @staticmethod
+    def _phone_digits(recipient: str) -> str:
+        return ''.join(char for char in (recipient or '') if char.isdigit())
+
+    @classmethod
+    def _is_phone_recipient(cls, recipient: str) -> bool:
+        normalized = (recipient or '').strip().replace(' ', '')
+        if not normalized:
+            return False
+        if normalized.startswith('+'):
+            return normalized[1:].isdigit()
+        return normalized.isdigit()
+
+    @classmethod
+    def is_valid_recipient(cls, recipient: Optional[str]) -> bool:
+        recipient = (recipient or '').strip()
+        if not recipient:
+            return False
+        if recipient.startswith('+'):
+            return cls._is_phone_recipient(recipient)
+        return True
 
     def _wait_for_compose_box(self, driver):
         wait = WebDriverWait(driver, self.config.WHATSAPP_WAIT_SECONDS)
@@ -332,21 +370,39 @@ class WhatsAppSender:
         Returns:
             bool: True if phone number is valid, False otherwise
         """
-        phone = self.config.WHATSAPP_PHONE_NUMBER
-
-        if self._get_group_invite_code():
-            return True
-
-        if not phone:
-            self.logger.error("WhatsApp phone number or group invite code not configured")
+        recipients = self._configured_recipients()
+        if not recipients:
+            self.logger.error("WhatsApp recipient is not configured")
             return False
 
-        if not phone.startswith('+') or not phone[1:].replace(' ', '').isdigit():
-            self.logger.error(f"Invalid phone number format: {phone}")
-            self.logger.info("Phone number should be in format: +1234567890")
-            return False
+        for recipient in recipients:
+            if not self.is_valid_recipient(recipient):
+                self.logger.error(f"Invalid WhatsApp recipient format: {recipient}")
+                self.logger.info(
+                    "Recipients should be a phone number, group invite URL, or group code"
+                )
+                return False
 
         return True
+
+    def _configured_recipients(self):
+        recipients = []
+        global_recipient = (
+            (getattr(self.config, 'WHATSAPP_GROUP_INVITE_CODE', '') or '').strip()
+            or getattr(self.config, 'WHATSAPP_PHONE_NUMBER', '')
+        )
+        if global_recipient:
+            recipients.append(global_recipient)
+
+        for field in (
+            'WHATSAPP_JOB_ALERT_RECIPIENT',
+            'WHATSAPP_MESSAGE_ALERT_RECIPIENT',
+        ):
+            recipient = (getattr(self.config, field, '') or '').strip()
+            if recipient:
+                recipients.append(recipient)
+
+        return recipients
 
     def format_email_message(self, email_data: Dict) -> str:
         """Format email data into a clean WhatsApp message."""

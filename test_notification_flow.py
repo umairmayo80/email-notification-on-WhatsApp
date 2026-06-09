@@ -47,13 +47,15 @@ class FakeWhatsAppSender:
             list(send_results) if isinstance(send_results, list) else [send_results]
         )
         self.sent_messages = []
+        self.sent_recipients = []
         self.events = events if events is not None else []
 
     def format_email_message(self, email_data):
         return f"Message for {email_data['subject']}"
 
-    def send_immediate_message(self, message):
+    def send_immediate_message(self, message, recipient=None):
         self.sent_messages.append(message)
+        self.sent_recipients.append(recipient)
         self.events.append(f"whatsapp:{message}")
         return self.send_results.pop(0) if self.send_results else False
 
@@ -208,6 +210,10 @@ class TestNotificationFlow(unittest.TestCase):
             'CHECK_INTERVAL_MINUTES': '5',
             'CONFIG_RELOAD_INTERVAL_SECONDS': '60',
             'MAX_EMAILS_PER_CHECK': '3',
+            'KEYWORDS_JOB_ALERT': '',
+            'KEYWORDS_MESSAGE_ALERT': '',
+            'WHATSAPP_JOB_ALERT_RECIPIENT': '',
+            'WHATSAPP_MESSAGE_ALERT_RECIPIENT': '',
             'KEYWORDS_TO_MONITOR': 'alert,message',
             'MONITOR_SPECIFIC_SENDERS': '',
             'NOTIFICATION_STATE_FILE': os.path.join(
@@ -238,6 +244,10 @@ class TestNotificationFlow(unittest.TestCase):
             env_path,
             WHATSAPP_MESSAGE_HEADER='Initial Alert',
             CONFIG_RELOAD_INTERVAL_SECONDS='90',
+            KEYWORDS_JOB_ALERT='job,invite',
+            KEYWORDS_MESSAGE_ALERT='message,chat',
+            WHATSAPP_JOB_ALERT_RECIPIENT='JobGroupCode',
+            WHATSAPP_MESSAGE_ALERT_RECIPIENT='+15551234567',
             KEYWORDS_TO_MONITOR='alpha,beta',
         )
 
@@ -246,6 +256,10 @@ class TestNotificationFlow(unittest.TestCase):
 
         self.assertEqual(runtime_config.WHATSAPP_MESSAGE_HEADER, 'Initial Alert')
         self.assertEqual(runtime_config.CONFIG_RELOAD_INTERVAL_SECONDS, 90)
+        self.assertEqual(runtime_config.KEYWORDS_JOB_ALERT, ['job', 'invite'])
+        self.assertEqual(runtime_config.KEYWORDS_MESSAGE_ALERT, ['message', 'chat'])
+        self.assertEqual(runtime_config.WHATSAPP_JOB_ALERT_RECIPIENT, 'JobGroupCode')
+        self.assertEqual(runtime_config.WHATSAPP_MESSAGE_ALERT_RECIPIENT, '+15551234567')
         self.assertEqual(runtime_config.KEYWORDS_TO_MONITOR, ['alpha', 'beta'])
 
     def test_runtime_config_reload_applies_changed_live_values(self):
@@ -266,6 +280,10 @@ class TestNotificationFlow(unittest.TestCase):
                 CHECK_INTERVAL_MINUTES='2',
                 CONFIG_RELOAD_INTERVAL_SECONDS='120',
                 MAX_EMAILS_PER_CHECK='7',
+                KEYWORDS_JOB_ALERT='job,alert',
+                KEYWORDS_MESSAGE_ALERT='client message',
+                WHATSAPP_JOB_ALERT_RECIPIENT='JobRouteGroup',
+                WHATSAPP_MESSAGE_ALERT_RECIPIENT='MessageRouteGroup',
                 KEYWORDS_TO_MONITOR='upwork,proposal',
             )
 
@@ -284,6 +302,13 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertEqual(notifier.config.CHECK_INTERVAL_MINUTES, 2)
         self.assertEqual(notifier.config.CONFIG_RELOAD_INTERVAL_SECONDS, 120)
         self.assertEqual(notifier.config.MAX_EMAILS_PER_CHECK, 7)
+        self.assertEqual(notifier.config.KEYWORDS_JOB_ALERT, ['job', 'alert'])
+        self.assertEqual(notifier.config.KEYWORDS_MESSAGE_ALERT, ['client message'])
+        self.assertEqual(notifier.config.WHATSAPP_JOB_ALERT_RECIPIENT, 'JobRouteGroup')
+        self.assertEqual(
+            notifier.config.WHATSAPP_MESSAGE_ALERT_RECIPIENT,
+            'MessageRouteGroup',
+        )
         self.assertEqual(notifier.config.KEYWORDS_TO_MONITOR, ['upwork', 'proposal'])
         self.assertIs(notifier.email_monitor.config, notifier.config)
         self.assertIs(notifier.email_sender.config, notifier.config)
@@ -383,6 +408,202 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertEqual(email_monitor.marked_seen, ['123'])
         self.assertEqual(email_sender.sent_email_ids, ['123'])
         self.assertEqual(whatsapp_sender.sent_messages, ['Message for Important'])
+
+    def test_message_alert_match_wins_over_job_alert_match(self):
+        route_config = type(
+            'RouteConfig',
+            (),
+            {
+                'KEYWORDS_MESSAGE_ALERT': ['message', 'sent you a message'],
+                'KEYWORDS_JOB_ALERT': ['alert', 'message', 'sent you a message'],
+                'KEYWORDS_TO_MONITOR': [],
+                'MONITOR_SPECIFIC_SENDERS': [],
+            },
+        )
+
+        alert_type = EmailMonitor.determine_alert_type(
+            {
+                'subject': 'A client sent you a message',
+                'body': 'New Upwork alert',
+                'sender': 'upwork@example.com',
+            },
+            route_config,
+        )
+
+        self.assertEqual(alert_type, 'message_alert')
+
+    def test_job_alert_skips_email_and_sends_whatsapp_only_to_job_recipient(self):
+        email = {
+            'id': 'job-1',
+            'subject': 'New alert matched',
+            'sender': 'upwork@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'A project alert is ready',
+        }
+        route_config = type(
+            'RouteConfig',
+            (),
+            {
+                'WHATSAPP_MAX_RETRIES': 3,
+                'WHATSAPP_RETRY_DELAY_SECONDS': 0,
+                'NOTIFICATION_DELAY_SECONDS': 0,
+                'KEYWORDS_MESSAGE_ALERT': [],
+                'KEYWORDS_JOB_ALERT': ['alert'],
+                'KEYWORDS_TO_MONITOR': [],
+                'MONITOR_SPECIFIC_SENDERS': [],
+                'WHATSAPP_JOB_ALERT_RECIPIENT': 'JobGroupCode',
+                'WHATSAPP_MESSAGE_ALERT_RECIPIENT': '',
+                'WHATSAPP_GROUP_INVITE_CODE': 'GlobalGroupCode',
+                'WHATSAPP_PHONE_NUMBER': '+1234567890',
+            },
+        )
+        email_monitor = FakeEmailMonitor([email])
+        email_sender = FakeEmailNotificationSender()
+        whatsapp_sender = FakeWhatsAppSender(send_results=True)
+        state = self.make_state()
+        notifier = self.make_notifier(
+            email_monitor,
+            whatsapp_sender,
+            email_sender,
+            state,
+            route_config,
+        )
+
+        notifier.check_emails_and_notify()
+
+        self.assertEqual(email_sender.sent_email_ids, [])
+        self.assertEqual(whatsapp_sender.sent_messages, ['Message for New alert matched'])
+        self.assertEqual(whatsapp_sender.sent_recipients, ['JobGroupCode'])
+        self.assertEqual(email_monitor.marked_seen, ['job-1'])
+        self.assertFalse(state.has_email_sent('job-1'))
+        self.assertEqual(state.get('job-1')['alert_type'], 'job_alert')
+        self.assertEqual(state.get('job-1')['whatsapp_recipient'], 'JobGroupCode')
+
+    def test_message_alert_sends_email_first_and_whatsapp_to_message_recipient(self):
+        email = {
+            'id': 'msg-1',
+            'subject': 'Client sent you a message',
+            'sender': 'upwork@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'Please review this message',
+        }
+        events = []
+        route_config = type(
+            'RouteConfig',
+            (),
+            {
+                'WHATSAPP_MAX_RETRIES': 3,
+                'WHATSAPP_RETRY_DELAY_SECONDS': 0,
+                'NOTIFICATION_DELAY_SECONDS': 0,
+                'KEYWORDS_MESSAGE_ALERT': ['message'],
+                'KEYWORDS_JOB_ALERT': ['alert', 'message'],
+                'KEYWORDS_TO_MONITOR': [],
+                'MONITOR_SPECIFIC_SENDERS': [],
+                'WHATSAPP_JOB_ALERT_RECIPIENT': 'JobGroupCode',
+                'WHATSAPP_MESSAGE_ALERT_RECIPIENT': 'MessageGroupCode',
+                'WHATSAPP_GROUP_INVITE_CODE': 'GlobalGroupCode',
+                'WHATSAPP_PHONE_NUMBER': '+1234567890',
+            },
+        )
+        email_sender = FakeEmailNotificationSender(events=events)
+        whatsapp_sender = FakeWhatsAppSender(send_results=True, events=events)
+        notifier = self.make_notifier(
+            FakeEmailMonitor([email]),
+            whatsapp_sender,
+            email_sender,
+            config=route_config,
+        )
+
+        notifier.check_emails_and_notify()
+
+        self.assertEqual(events, ['email:msg-1', 'whatsapp:Message for Client sent you a message'])
+        self.assertEqual(email_sender.sent_email_ids, ['msg-1'])
+        self.assertEqual(whatsapp_sender.sent_recipients, ['MessageGroupCode'])
+
+    def test_empty_route_recipient_falls_back_to_global_whatsapp_target(self):
+        email = {
+            'id': 'job-2',
+            'subject': 'Project alert',
+            'sender': 'upwork@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'Body',
+        }
+        route_config = type(
+            'RouteConfig',
+            (),
+            {
+                'WHATSAPP_MAX_RETRIES': 3,
+                'WHATSAPP_RETRY_DELAY_SECONDS': 0,
+                'NOTIFICATION_DELAY_SECONDS': 0,
+                'KEYWORDS_MESSAGE_ALERT': [],
+                'KEYWORDS_JOB_ALERT': ['alert'],
+                'KEYWORDS_TO_MONITOR': [],
+                'MONITOR_SPECIFIC_SENDERS': [],
+                'WHATSAPP_JOB_ALERT_RECIPIENT': '',
+                'WHATSAPP_MESSAGE_ALERT_RECIPIENT': '',
+                'WHATSAPP_GROUP_INVITE_CODE': 'GlobalGroupCode',
+                'WHATSAPP_PHONE_NUMBER': '+1234567890',
+            },
+        )
+        whatsapp_sender = FakeWhatsAppSender(send_results=True)
+        notifier = self.make_notifier(
+            FakeEmailMonitor([email]),
+            whatsapp_sender,
+            FakeEmailNotificationSender(),
+            config=route_config,
+        )
+
+        notifier.check_emails_and_notify()
+
+        self.assertEqual(whatsapp_sender.sent_recipients, ['GlobalGroupCode'])
+
+    def test_whatsapp_only_job_alert_failure_queues_retry_without_email_state(self):
+        email = {
+            'id': 'job-3',
+            'subject': 'Project alert',
+            'sender': 'upwork@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'Body',
+        }
+        route_config = type(
+            'RouteConfig',
+            (),
+            {
+                'WHATSAPP_MAX_RETRIES': 3,
+                'WHATSAPP_RETRY_DELAY_SECONDS': 0,
+                'NOTIFICATION_DELAY_SECONDS': 0,
+                'KEYWORDS_MESSAGE_ALERT': [],
+                'KEYWORDS_JOB_ALERT': ['alert'],
+                'KEYWORDS_TO_MONITOR': [],
+                'MONITOR_SPECIFIC_SENDERS': [],
+                'WHATSAPP_JOB_ALERT_RECIPIENT': 'JobGroupCode',
+                'WHATSAPP_MESSAGE_ALERT_RECIPIENT': '',
+                'WHATSAPP_GROUP_INVITE_CODE': 'GlobalGroupCode',
+                'WHATSAPP_PHONE_NUMBER': '+1234567890',
+            },
+        )
+        email_sender = FakeEmailNotificationSender()
+        whatsapp_sender = FakeWhatsAppSender(send_results=False)
+        state = self.make_state()
+        notifier = self.make_notifier(
+            FakeEmailMonitor([email]),
+            whatsapp_sender,
+            email_sender,
+            state,
+            route_config,
+        )
+
+        notifier.check_emails_and_notify()
+
+        entry = state.get('job-3')
+        due_entries = state.get_due_whatsapp_notifications(max_retries=3)
+
+        self.assertEqual(email_sender.sent_email_ids, [])
+        self.assertEqual(entry['status'], 'queued')
+        self.assertFalse(entry.get('email_sent', False))
+        self.assertFalse(entry['email_required'])
+        self.assertEqual(entry['whatsapp_recipient'], 'JobGroupCode')
+        self.assertEqual([item['email_data']['id'] for item in due_entries], ['job-3'])
 
     def test_email_notification_message_uses_configured_subject_and_intro(self):
         sender = self.make_email_notification_sender()
@@ -736,6 +957,8 @@ class TestNotificationFlow(unittest.TestCase):
             {
                 'WHATSAPP_PHONE_NUMBER': '+1234567890',
                 'WHATSAPP_GROUP_INVITE_CODE': '',
+                'WHATSAPP_JOB_ALERT_RECIPIENT': '',
+                'WHATSAPP_MESSAGE_ALERT_RECIPIENT': '',
                 'WHATSAPP_CHROME_PROFILE_DIR': '.whatsapp_chrome_profile',
                 'WHATSAPP_WAIT_SECONDS': 1,
                 'WHATSAPP_HEADLESS': False,
@@ -866,6 +1089,24 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertEqual(
             url,
             'https://web.whatsapp.com/accept?code=GroupInvite123',
+        )
+
+    def test_recipient_override_builds_group_or_phone_chat_url(self):
+        sender = self.make_whatsapp_sender()
+
+        group_url = sender._build_chat_url(
+            'hello group',
+            recipient='https://web.whatsapp.com/accept?code=RouteGroup123&utm_campaign=wa_chat_v2',
+        )
+        phone_url = sender._build_chat_url('hello phone', recipient='+1 555 123 4567')
+
+        self.assertEqual(
+            group_url,
+            'https://web.whatsapp.com/accept?code=RouteGroup123',
+        )
+        self.assertEqual(
+            phone_url,
+            'https://web.whatsapp.com/send?phone=15551234567&text=hello%20phone',
         )
 
     def test_group_invite_code_allows_whatsapp_validation_without_phone(self):

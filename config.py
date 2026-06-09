@@ -20,6 +20,8 @@ CONFIG_FIELD_NAMES = (
     'EMAIL_NOTIFICATION_BODY_INTRO',
     'WHATSAPP_PHONE_NUMBER',
     'WHATSAPP_GROUP_INVITE_CODE',
+    'WHATSAPP_JOB_ALERT_RECIPIENT',
+    'WHATSAPP_MESSAGE_ALERT_RECIPIENT',
     'WHATSAPP_CHROME_PROFILE_DIR',
     'WHATSAPP_WAIT_SECONDS',
     'WHATSAPP_MAX_RETRIES',
@@ -34,6 +36,8 @@ CONFIG_FIELD_NAMES = (
     'MAX_EMAILS_PER_CHECK',
     'EMAIL_SCAN_MULTIPLIER',
     'NOTIFICATION_DELAY_SECONDS',
+    'KEYWORDS_JOB_ALERT',
+    'KEYWORDS_MESSAGE_ALERT',
     'KEYWORDS_TO_MONITOR',
     'NOTIFICATION_STATE_FILE',
     'MONITOR_SPECIFIC_SENDERS',
@@ -163,6 +167,14 @@ class Config:
         # WhatsApp configuration
         self.WHATSAPP_PHONE_NUMBER = self._get('WHATSAPP_PHONE_NUMBER')
         self.WHATSAPP_GROUP_INVITE_CODE = self._get('WHATSAPP_GROUP_INVITE_CODE', '').strip()
+        self.WHATSAPP_JOB_ALERT_RECIPIENT = self._get(
+            'WHATSAPP_JOB_ALERT_RECIPIENT',
+            '',
+        ).strip()
+        self.WHATSAPP_MESSAGE_ALERT_RECIPIENT = self._get(
+            'WHATSAPP_MESSAGE_ALERT_RECIPIENT',
+            '',
+        ).strip()
         self.WHATSAPP_CHROME_PROFILE_DIR = self._get(
             'WHATSAPP_CHROME_PROFILE_DIR',
             '.whatsapp_chrome_profile',
@@ -200,6 +212,8 @@ class Config:
             'NOTIFICATION_DELAY_SECONDS',
             2,
         )
+        self.KEYWORDS_JOB_ALERT = self._get_list('KEYWORDS_JOB_ALERT')
+        self.KEYWORDS_MESSAGE_ALERT = self._get_list('KEYWORDS_MESSAGE_ALERT')
         self.KEYWORDS_TO_MONITOR = self._get_list('KEYWORDS_TO_MONITOR')
         self.NOTIFICATION_STATE_FILE = self._get(
             'NOTIFICATION_STATE_FILE',
@@ -306,10 +320,17 @@ class Config:
         if missing_fields:
             raise ValueError(f"Missing required configuration: {', '.join(missing_fields)}")
 
-        if not self.WHATSAPP_PHONE_NUMBER and not self.WHATSAPP_GROUP_INVITE_CODE:
+        if not any(
+            (
+                self.WHATSAPP_PHONE_NUMBER,
+                self.WHATSAPP_GROUP_INVITE_CODE,
+                self.WHATSAPP_JOB_ALERT_RECIPIENT,
+                self.WHATSAPP_MESSAGE_ALERT_RECIPIENT,
+            )
+        ):
             raise ValueError(
                 "Missing required configuration: WHATSAPP_PHONE_NUMBER or "
-                "WHATSAPP_GROUP_INVITE_CODE"
+                "WHATSAPP_GROUP_INVITE_CODE or routed WhatsApp recipient"
             )
         
         return True

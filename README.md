@@ -60,6 +60,8 @@ A Python application that monitors your Gmail inbox, sends email notifications f
    # WhatsApp Configuration
    WHATSAPP_PHONE_NUMBER=+1234567890
    WHATSAPP_GROUP_INVITE_CODE=  # Optional; full group invite URL or code overrides phone number
+   WHATSAPP_JOB_ALERT_RECIPIENT=  # Optional; phone, group invite URL, or group code for job alerts
+   WHATSAPP_MESSAGE_ALERT_RECIPIENT=  # Optional; phone, group invite URL, or group code for message alerts
    WHATSAPP_CHROME_PROFILE_DIR=.whatsapp_chrome_profile
    WHATSAPP_WAIT_SECONDS=90
    WHATSAPP_MAX_RETRIES=3
@@ -75,6 +77,8 @@ A Python application that monitors your Gmail inbox, sends email notifications f
    MAX_EMAILS_PER_CHECK=3  # Maximum unread emails to process per check
    EMAIL_SCAN_MULTIPLIER=5  # Scan a wider unread window before applying filters
    NOTIFICATION_DELAY_SECONDS=2
+   KEYWORDS_JOB_ALERT=alert,message,sent you a message
+   KEYWORDS_MESSAGE_ALERT=message,sent you a message
    KEYWORDS_TO_MONITOR=  # Leave empty to monitor all emails
    MONITOR_SPECIFIC_SENDERS=  # Leave empty to monitor all senders
    ```
@@ -108,6 +112,8 @@ For Gmail users, you need to:
 | `EMAIL_NOTIFICATION_BODY_INTRO` | First sentence in outbound notification email bodies | `New Upwork alert matched your notification rule.` |
 | `WHATSAPP_PHONE_NUMBER` | WhatsApp number with country code | `+1234567890` |
 | `WHATSAPP_GROUP_INVITE_CODE` | Optional group invite URL/code; when set, WhatsApp sends to the group instead of the phone number | `https://web.whatsapp.com/accept?code=...` |
+| `WHATSAPP_JOB_ALERT_RECIPIENT` | Optional phone/group target for job-alert WhatsApp-only notifications | `https://web.whatsapp.com/accept?code=...` |
+| `WHATSAPP_MESSAGE_ALERT_RECIPIENT` | Optional phone/group target for message-alert email + WhatsApp notifications | `https://web.whatsapp.com/accept?code=...` |
 | `WHATSAPP_CHROME_PROFILE_DIR` | Dedicated Chrome profile for WhatsApp automation | `.whatsapp_chrome_profile` |
 | `WHATSAPP_WAIT_SECONDS` | Wait time for WhatsApp Web elements | `90` |
 | `WHATSAPP_MAX_RETRIES` | WhatsApp retry attempts after email notification succeeds | `3` |
@@ -121,6 +127,8 @@ For Gmail users, you need to:
 | `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
 | `EMAIL_SCAN_MULTIPLIER` | How many more unread candidates to scan before filtering | `5` |
 | `NOTIFICATION_DELAY_SECONDS` | Delay between notification attempts | `2` |
+| `KEYWORDS_JOB_ALERT` | Job-alert keywords; matches send WhatsApp only | `alert,message,sent you a message` |
+| `KEYWORDS_MESSAGE_ALERT` | Message-alert keywords; matches send email first, then WhatsApp | `message,sent you a message` |
 | `KEYWORDS_TO_MONITOR` | Comma-separated keywords (leave empty for all emails) | `urgent,important` or empty |
 | `MONITOR_SPECIFIC_SENDERS` | Comma-separated email addresses (leave empty for all) | `boss@company.com` or empty |
 
@@ -143,23 +151,26 @@ python main.py --once
 1. **Email Monitoring**: Connects to Gmail via IMAP and searches for unread emails from today
 2. **Delivery-aware Fetching**: Uses BODY.PEEK to read email content without marking as read before delivery
 3. **Smart Filtering**: Processes emails based on your criteria:
-   - Keywords in subject or body (optional)
+   - Message-alert keywords are checked first and send email + WhatsApp
+   - Job-alert keywords are checked second and send WhatsApp only
+   - Legacy keywords in subject or body are still supported
    - Specific sender addresses (optional)
    - Leave filters empty to monitor ALL emails
 4. **Wider Candidate Scan**: Scans up to `MAX_EMAILS_PER_CHECK * EMAIL_SCAN_MULTIPLIER` recent unread messages, then notifies up to `MAX_EMAILS_PER_CHECK`
-5. **Email Notification First**: Sends a notification email to `NOTIFY_EMAIL_RECIPIENTS`
-6. **WhatsApp Notification Second**: Sends clean, formatted WhatsApp messages with:
+5. **Route-aware Email Delivery**: Message alerts and legacy alerts send email to `NOTIFY_EMAIL_RECIPIENTS`; job alerts skip email
+6. **Route-aware WhatsApp Delivery**: Sends to the route-specific WhatsApp recipient when configured, otherwise falls back to the global WhatsApp target
+7. **Clean WhatsApp Message Format**: Sends formatted WhatsApp messages with:
    - 📧 Email icon
    - Sender name and email
    - Subject line
    - Body preview (first 150 characters)
-7. **Retry-aware Read-state Update**: Marks matching emails as read after WhatsApp succeeds or exhausts configured retries
-8. **Throttled Config Reload**: Checks `.env` every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds and applies changed message text, filters, recipients, limits, and intervals without restart
-9. **Continuous Monitoring**: Repeats every `CHECK_INTERVAL_MINUTES` minutes (configurable) for real-time alerts
+8. **Retry-aware Read-state Update**: Marks matching emails as read after WhatsApp succeeds or exhausts configured retries
+9. **Throttled Config Reload**: Checks `.env` every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds and applies changed message text, filters, recipients, limits, and intervals without restart
+10. **Continuous Monitoring**: Repeats every `CHECK_INTERVAL_MINUTES` minutes (configurable) for real-time alerts
 
 ## Runtime Configuration Reloads
 
-While `python main.py` is running, the app checks `.env` for updates every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds. Changes to message headers, email subject/body text, recipients, keywords, sender filters, check interval, batch size, retry timing, SMTP settings, and most WhatsApp settings apply after the next reload check.
+While `python main.py` is running, the app checks `.env` for updates every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds. Changes to message headers, routed alert keywords, email subject/body text, recipients, keywords, sender filters, check interval, batch size, retry timing, SMTP settings, and most WhatsApp settings apply after the next reload check.
 
 If IMAP settings change, the current email connection is closed and the next scan reconnects. If Chrome/profile/headless settings change, the current WhatsApp browser is closed and the next WhatsApp send opens a new browser with the updated settings. `NOTIFICATION_STATE_FILE` is intentionally restart-only so pending retry state is not split across files.
 

@@ -130,18 +130,23 @@ class EmailToWhatsAppNotifier:
 
     @staticmethod
     def _validate_whatsapp_target(config):
-        if config.WHATSAPP_GROUP_INVITE_CODE:
-            return True
+        recipients = [
+            (getattr(config, 'WHATSAPP_GROUP_INVITE_CODE', '') or '').strip()
+            or getattr(config, 'WHATSAPP_PHONE_NUMBER', ''),
+            getattr(config, 'WHATSAPP_JOB_ALERT_RECIPIENT', ''),
+            getattr(config, 'WHATSAPP_MESSAGE_ALERT_RECIPIENT', ''),
+        ]
+        recipients = [recipient.strip() for recipient in recipients if recipient]
 
-        phone = config.WHATSAPP_PHONE_NUMBER
-        if not phone:
+        if not recipients:
             raise ValueError(
                 "Missing required configuration: WHATSAPP_PHONE_NUMBER or "
-                "WHATSAPP_GROUP_INVITE_CODE"
+                "WHATSAPP_GROUP_INVITE_CODE or routed WhatsApp recipient"
             )
 
-        if not phone.startswith('+') or not phone[1:].replace(' ', '').isdigit():
-            raise ValueError(f"Invalid WHATSAPP_PHONE_NUMBER format: {phone}")
+        for recipient in recipients:
+            if not WhatsAppSender.is_valid_recipient(recipient):
+                raise ValueError(f"Invalid WhatsApp recipient format: {recipient}")
 
         return True
     
@@ -175,6 +180,8 @@ class EmailToWhatsAppNotifier:
         """Send the configured email notification, then try WhatsApp."""
         email_id = str(email_data['id'])
         subject = email_data.get('subject', 'No Subject')
+        alert_type = self._alert_type_for_email(email_data)
+        whatsapp_recipient = self._whatsapp_recipient_for_alert(alert_type)
         message = self.whatsapp_sender.format_email_message(email_data)
 
         if self.notification_state.is_whatsapp_terminal(email_id):
@@ -182,17 +189,72 @@ class EmailToWhatsAppNotifier:
             self.mark_email_seen(email_id, subject)
             return
 
-        if not self.notification_state.has_email_sent(email_id):
-            if not self.email_sender.send_email_notification(email_data):
-                self.logger.error(
-                    f"Email notification failed; WhatsApp will not be attempted for: {subject}"
+        if self._requires_email_for_alert(alert_type):
+            if not self.notification_state.has_email_sent(email_id):
+                if not self.email_sender.send_email_notification(email_data):
+                    self.logger.error(
+                        f"Email notification failed; WhatsApp will not be attempted for: {subject}"
+                    )
+                    return
+                self.notification_state.record_email_sent(
+                    email_data,
+                    message,
+                    alert_type=alert_type,
+                    whatsapp_recipient=whatsapp_recipient,
                 )
-                return
-            self.notification_state.record_email_sent(email_data, message)
+            else:
+                self.logger.info(f"Email notification already sent; not resending: {subject}")
+                entry = self.notification_state.get(email_id) or {}
+                whatsapp_recipient = entry.get('whatsapp_recipient') or whatsapp_recipient
         else:
-            self.logger.info(f"Email notification already sent; not resending: {subject}")
+            self.logger.info(f"Skipping email notification for job alert: {subject}")
+            self.notification_state.record_whatsapp_queued(
+                email_data,
+                message,
+                alert_type=alert_type,
+                whatsapp_recipient=whatsapp_recipient,
+                email_required=False,
+            )
 
-        self.attempt_whatsapp_notification(email_data, message)
+        self.attempt_whatsapp_notification(
+            email_data,
+            message,
+            alert_type=alert_type,
+            whatsapp_recipient=whatsapp_recipient,
+        )
+
+    def _alert_type_for_email(self, email_data):
+        return (
+            email_data.get('alert_type')
+            or EmailMonitor.determine_alert_type(email_data, self.config)
+            or 'legacy'
+        )
+
+    @staticmethod
+    def _requires_email_for_alert(alert_type: str) -> bool:
+        return alert_type != 'job_alert'
+
+    def _whatsapp_recipient_for_alert(self, alert_type: str) -> str:
+        if alert_type == 'message_alert':
+            return (
+                (getattr(self.config, 'WHATSAPP_MESSAGE_ALERT_RECIPIENT', '') or '').strip()
+                or self._global_whatsapp_recipient()
+            )
+
+        if alert_type == 'job_alert':
+            return (
+                (getattr(self.config, 'WHATSAPP_JOB_ALERT_RECIPIENT', '') or '').strip()
+                or self._global_whatsapp_recipient()
+            )
+
+        return self._global_whatsapp_recipient()
+
+    def _global_whatsapp_recipient(self) -> str:
+        return (
+            (getattr(self.config, 'WHATSAPP_GROUP_INVITE_CODE', '') or '').strip()
+            or getattr(self.config, 'WHATSAPP_PHONE_NUMBER', '')
+            or ''
+        )
 
     def process_due_whatsapp_retries(self, exclude_email_ids=None):
         """Retry queued WhatsApp notifications without resending email."""
@@ -215,21 +277,42 @@ class EmailToWhatsAppNotifier:
             if not email_data:
                 continue
 
+            alert_type = entry.get('alert_type') or self._alert_type_for_email(email_data)
+            whatsapp_recipient = (
+                entry.get('whatsapp_recipient')
+                or self._whatsapp_recipient_for_alert(alert_type)
+            )
             message = self.whatsapp_sender.format_email_message(email_data)
             if not message:
                 message = entry.get('message')
             if not message:
                 continue
 
-            self.attempt_whatsapp_notification(email_data, message)
+            self.attempt_whatsapp_notification(
+                email_data,
+                message,
+                alert_type=alert_type,
+                whatsapp_recipient=whatsapp_recipient,
+            )
 
             if self.config.NOTIFICATION_DELAY_SECONDS:
                 time.sleep(self.config.NOTIFICATION_DELAY_SECONDS)
 
-    def attempt_whatsapp_notification(self, email_data, message):
+    def attempt_whatsapp_notification(
+        self,
+        email_data,
+        message,
+        alert_type='legacy',
+        whatsapp_recipient=None,
+    ):
         """Attempt WhatsApp delivery and update persisted retry state."""
         email_id = str(email_data['id'])
         subject = email_data.get('subject', 'No Subject')
+        whatsapp_recipient = (
+            whatsapp_recipient
+            if whatsapp_recipient is not None
+            else self._whatsapp_recipient_for_alert(alert_type)
+        )
 
         if self.notification_state.whatsapp_attempts_exhausted(
             email_id,
@@ -244,13 +327,18 @@ class EmailToWhatsAppNotifier:
             self.logger.info(f"WhatsApp retry is not due yet for email: {subject}")
             return False
 
-        if self.whatsapp_sender.send_immediate_message(message):
+        if self.whatsapp_sender.send_immediate_message(
+            message,
+            recipient=whatsapp_recipient,
+        ):
             self.notification_state.record_whatsapp_result(
                 email_data,
                 message,
                 success=True,
                 max_retries=self.config.WHATSAPP_MAX_RETRIES,
                 retry_delay_seconds=self.config.WHATSAPP_RETRY_DELAY_SECONDS,
+                alert_type=alert_type,
+                whatsapp_recipient=whatsapp_recipient,
             )
             self.logger.info(f"WhatsApp notification sent for email: {subject}")
             self.mark_email_seen(email_id, subject)
@@ -263,6 +351,8 @@ class EmailToWhatsAppNotifier:
             max_retries=self.config.WHATSAPP_MAX_RETRIES,
             retry_delay_seconds=self.config.WHATSAPP_RETRY_DELAY_SECONDS,
             error='WhatsApp send was not verified',
+            alert_type=alert_type,
+            whatsapp_recipient=whatsapp_recipient,
         )
 
         if entry.get('status') == 'exhausted':

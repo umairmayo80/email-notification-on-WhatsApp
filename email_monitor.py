@@ -109,9 +109,19 @@ class EmailMonitor:
                 for i, email_uid in enumerate(candidate_uids):
                     self.logger.info(f"Processing email {i+1}/{len(candidate_uids)}")
                     email_data = self.fetch_email(email_uid)
-                    if email_data and self.should_notify(email_data):
+                    if email_data:
+                        alert_type = self.get_alert_type(email_data)
+                    else:
+                        alert_type = None
+
+                    if email_data and alert_type:
+                        email_data['alert_type'] = alert_type
                         new_emails.append(email_data)
-                        self.logger.info(f"Email matches notification criteria: {email_data['subject']}")
+                        self.logger.info(
+                            "Email matches %s notification criteria: %s",
+                            alert_type,
+                            email_data['subject'],
+                        )
                         if len(new_emails) >= max_emails:
                             break
                     else:
@@ -247,34 +257,71 @@ class EmailMonitor:
     
     def should_notify(self, email_data: Dict) -> bool:
         """Determine if this email should trigger a WhatsApp notification"""
-        # If no specific senders and no keywords are configured, notify for all emails
-        if not self.config.MONITOR_SPECIFIC_SENDERS and not self.config.KEYWORDS_TO_MONITOR:
-            self.logger.info(f"No filters configured - notifying for all emails")
-            return True
-        
-        # Check if we should monitor specific senders
-        if self.config.MONITOR_SPECIFIC_SENDERS:
-            sender_match = any(sender.lower() in email_data['sender'].lower() 
-                             for sender in self.config.MONITOR_SPECIFIC_SENDERS)
-            if sender_match:
-                self.logger.info(f"Email matches monitored sender: {email_data['sender']}")
-                return True
-        
-        # Check for keywords in subject or body
-        if self.config.KEYWORDS_TO_MONITOR:
-            text_to_search = f"{email_data['subject']} {email_data['body']}".lower()
-            keyword_match = any(keyword.lower().strip() in text_to_search 
-                              for keyword in self.config.KEYWORDS_TO_MONITOR)
-            if keyword_match:
-                self.logger.info(f"Email matches keyword filter")
-                return True
-        
-        # If we have filters but none matched
-        if self.config.MONITOR_SPECIFIC_SENDERS or self.config.KEYWORDS_TO_MONITOR:
-            self.logger.info(f"Email does not match any configured filters")
-            return False
-        
-        return True
+        return bool(self.get_alert_type(email_data))
+
+    def get_alert_type(self, email_data: Dict) -> Optional[str]:
+        """Return message_alert, job_alert, legacy, or None for this email."""
+        alert_type = self.determine_alert_type(email_data, self.config)
+
+        if alert_type == 'message_alert':
+            self.logger.info("Email matches message alert keyword filter")
+        elif alert_type == 'job_alert':
+            self.logger.info("Email matches job alert keyword filter")
+        elif alert_type == 'legacy':
+            self.logger.info("Email matches legacy notification criteria")
+        else:
+            self.logger.info("Email does not match any configured filters")
+
+        return alert_type
+
+    @classmethod
+    def determine_alert_type(cls, email_data: Dict, config) -> Optional[str]:
+        """Classify an email using routed keyword lists before legacy filters."""
+        text_to_search = cls._email_search_text(email_data)
+
+        if cls._matches_keywords(
+            text_to_search,
+            getattr(config, 'KEYWORDS_MESSAGE_ALERT', []),
+        ):
+            return 'message_alert'
+
+        if cls._matches_keywords(
+            text_to_search,
+            getattr(config, 'KEYWORDS_JOB_ALERT', []),
+        ):
+            return 'job_alert'
+
+        sender_filters = getattr(config, 'MONITOR_SPECIFIC_SENDERS', [])
+        legacy_keywords = getattr(config, 'KEYWORDS_TO_MONITOR', [])
+        has_routed_filters = bool(
+            getattr(config, 'KEYWORDS_MESSAGE_ALERT', [])
+            or getattr(config, 'KEYWORDS_JOB_ALERT', [])
+        )
+
+        if sender_filters:
+            sender = email_data.get('sender', '').lower()
+            if any(filter_value.lower() in sender for filter_value in sender_filters):
+                return 'legacy'
+
+        if cls._matches_keywords(text_to_search, legacy_keywords):
+            return 'legacy'
+
+        if not sender_filters and not legacy_keywords and not has_routed_filters:
+            return 'legacy'
+
+        return None
+
+    @staticmethod
+    def _email_search_text(email_data: Dict) -> str:
+        return f"{email_data.get('subject', '')} {email_data.get('body', '')}".lower()
+
+    @staticmethod
+    def _matches_keywords(text_to_search: str, keywords) -> bool:
+        return any(
+            keyword.lower().strip() in text_to_search
+            for keyword in keywords
+            if keyword and keyword.strip()
+        )
     
     def format_notification_message(self, email_data: Dict) -> str:
         """Format the email data into a WhatsApp notification message"""
