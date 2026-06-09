@@ -50,8 +50,14 @@ class FakeWhatsAppSender:
         self.sent_recipients = []
         self.events = events if events is not None else []
 
-    def format_email_message(self, email_data):
-        return f"Message for {email_data['subject']}"
+    def format_email_message(self, email_data, alert_type=None):
+        if alert_type == 'message_alert':
+            header = 'Message Alert'
+        elif alert_type == 'job_alert':
+            header = 'Job Alert'
+        else:
+            header = 'Message'
+        return f"{header} for {email_data['subject']}"
 
     def send_immediate_message(self, message, recipient=None):
         self.sent_messages.append(message)
@@ -472,7 +478,7 @@ class TestNotificationFlow(unittest.TestCase):
         notifier.check_emails_and_notify()
 
         self.assertEqual(email_sender.sent_email_ids, [])
-        self.assertEqual(whatsapp_sender.sent_messages, ['Message for New alert matched'])
+        self.assertEqual(whatsapp_sender.sent_messages, ['Job Alert for New alert matched'])
         self.assertEqual(whatsapp_sender.sent_recipients, ['JobGroupCode'])
         self.assertEqual(email_monitor.marked_seen, ['job-1'])
         self.assertFalse(state.has_email_sent('job-1'))
@@ -516,7 +522,10 @@ class TestNotificationFlow(unittest.TestCase):
 
         notifier.check_emails_and_notify()
 
-        self.assertEqual(events, ['email:msg-1', 'whatsapp:Message for Client sent you a message'])
+        self.assertEqual(
+            events,
+            ['email:msg-1', 'whatsapp:Message Alert for Client sent you a message'],
+        )
         self.assertEqual(email_sender.sent_email_ids, ['msg-1'])
         self.assertEqual(whatsapp_sender.sent_recipients, ['MessageGroupCode'])
 
@@ -707,7 +716,11 @@ class TestNotificationFlow(unittest.TestCase):
             'body': 'Body',
         }
         state = self.make_state()
-        state.record_email_sent(email, 'Old Header: Pending retry')
+        state.record_email_sent(
+            email,
+            'Old Header: Pending retry',
+            alert_type='message_alert',
+        )
 
         class DynamicWhatsAppSender(FakeWhatsAppSender):
             def __init__(self):
@@ -718,11 +731,14 @@ class TestNotificationFlow(unittest.TestCase):
                     {'WHATSAPP_MESSAGE_HEADER': 'Current Header'},
                 )
 
-            def format_email_message(self, email_data):
-                return (
-                    f"{self.config.WHATSAPP_MESSAGE_HEADER}: "
-                    f"{email_data['subject']}"
-                )
+            def format_email_message(self, email_data, alert_type=None):
+                if alert_type == 'job_alert':
+                    header = 'Job Alert'
+                elif alert_type == 'message_alert':
+                    header = 'Message Alert'
+                else:
+                    header = self.config.WHATSAPP_MESSAGE_HEADER
+                return f"{header}: {email_data['subject']}"
 
         notifier = self.make_notifier(
             FakeEmailMonitor([]),
@@ -743,7 +759,7 @@ class TestNotificationFlow(unittest.TestCase):
 
         self.assertEqual(
             notifier.whatsapp_sender.sent_messages,
-            ['Current Header: Pending retry'],
+            ['Message Alert: Pending retry'],
         )
 
     def test_whatsapp_success_marks_email_as_seen(self):
@@ -1184,6 +1200,36 @@ class TestNotificationFlow(unittest.TestCase):
 
         self.assertTrue(message.startswith('Custom Header\n\n'))
         self.assertNotIn('🚀', message)
+
+    def test_format_email_message_uses_message_alert_header(self):
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_MESSAGE_HEADER = 'Custom Header'
+
+        message = sender.format_email_message(
+            {
+                'subject': 'Testing',
+                'sender': 'sender@example.com',
+                'body': 'Body',
+            },
+            alert_type='message_alert',
+        )
+
+        self.assertTrue(message.startswith('Message Alert\n\n'))
+
+    def test_format_email_message_uses_job_alert_header(self):
+        sender = self.make_whatsapp_sender()
+        sender.config.WHATSAPP_MESSAGE_HEADER = 'Custom Header'
+
+        message = sender.format_email_message(
+            {
+                'subject': 'Testing',
+                'sender': 'sender@example.com',
+                'body': 'Body',
+            },
+            alert_type='job_alert',
+        )
+
+        self.assertTrue(message.startswith('Job Alert\n\n'))
 
     def test_sanitize_message_for_whatsapp_removes_non_bmp_characters(self):
         sender = self.make_whatsapp_sender()

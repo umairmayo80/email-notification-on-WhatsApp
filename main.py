@@ -182,7 +182,10 @@ class EmailToWhatsAppNotifier:
         subject = email_data.get('subject', 'No Subject')
         alert_type = self._alert_type_for_email(email_data)
         whatsapp_recipient = self._whatsapp_recipient_for_alert(alert_type)
-        message = self.whatsapp_sender.format_email_message(email_data)
+        message = self.whatsapp_sender.format_email_message(
+            email_data,
+            alert_type=alert_type,
+        )
 
         if self.notification_state.is_whatsapp_terminal(email_id):
             self.logger.info(f"Notification already completed for email: {subject}")
@@ -282,7 +285,10 @@ class EmailToWhatsAppNotifier:
                 entry.get('whatsapp_recipient')
                 or self._whatsapp_recipient_for_alert(alert_type)
             )
-            message = self.whatsapp_sender.format_email_message(email_data)
+            message = self.whatsapp_sender.format_email_message(
+                email_data,
+                alert_type=alert_type,
+            )
             if not message:
                 message = entry.get('message')
             if not message:

@@ -404,7 +404,7 @@ class WhatsAppSender:
 
         return recipients
 
-    def format_email_message(self, email_data: Dict) -> str:
+    def format_email_message(self, email_data: Dict, alert_type: Optional[str] = None) -> str:
         """Format email data into a clean WhatsApp message."""
         subject = self._sanitize_message_for_whatsapp(
             email_data.get('subject', 'No Subject')
@@ -419,9 +419,7 @@ class WhatsAppSender:
             if len(body) > 150:
                 body = body[:150] + "..."
 
-        header = self._sanitize_message_for_whatsapp(
-            getattr(self.config, 'WHATSAPP_MESSAGE_HEADER', 'Upwork Alert')
-        ) or 'Upwork Alert'
+        header = self._message_header_for_alert(alert_type)
 
         message = f"{header}\n\n"
         message += f"From: {sender}\n"
@@ -430,3 +428,16 @@ class WhatsAppSender:
             message += f"\nPreview: {body}"
 
         return self._sanitize_message_for_whatsapp(message)
+
+    def _message_header_for_alert(self, alert_type: Optional[str]) -> str:
+        if alert_type == 'message_alert':
+            return 'Message Alert'
+        if alert_type == 'job_alert':
+            return 'Job Alert'
+
+        return (
+            self._sanitize_message_for_whatsapp(
+                getattr(self.config, 'WHATSAPP_MESSAGE_HEADER', 'Upwork Alert')
+            )
+            or 'Upwork Alert'
+        )
