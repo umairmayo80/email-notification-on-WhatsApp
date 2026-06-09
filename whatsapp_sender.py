@@ -35,8 +35,8 @@ class WhatsAppSender:
     )
     COMPOSE_BOX_XPATH = "//footer//div[@contenteditable='true']"
 
-    def __init__(self):
-        self.config = Config()
+    def __init__(self, config=None):
+        self.config = config or Config()
         self.logger = logging.getLogger(__name__)
         self.driver = None
 

@@ -10,8 +10,8 @@ from config import Config
 class EmailNotificationSender:
     """Send email notifications before the WhatsApp attempt."""
 
-    def __init__(self):
-        self.config = Config()
+    def __init__(self, config=None):
+        self.config = config or Config()
         self.logger = logging.getLogger(__name__)
 
     def send_email_notification(self, email_data: Dict) -> bool:

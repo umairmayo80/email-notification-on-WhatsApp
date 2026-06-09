@@ -7,8 +7,8 @@ from email.header import decode_header
 from config import Config
 
 class EmailMonitor:
-    def __init__(self):
-        self.config = Config()
+    def __init__(self, config=None):
+        self.config = config or Config()
         self.last_check_time = None
         self.connection = None
         

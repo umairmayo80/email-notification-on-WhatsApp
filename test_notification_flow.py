@@ -107,6 +107,29 @@ class FakeIMAPConnection:
         return 'NO', [b'Unsupported command']
 
 
+class RuntimeConfigFakeEmailMonitor:
+    def __init__(self, config):
+        self.config = config
+        self.disconnect_count = 0
+
+    def disconnect_from_email(self):
+        self.disconnect_count += 1
+
+
+class RuntimeConfigFakeEmailSender:
+    def __init__(self, config):
+        self.config = config
+
+
+class RuntimeConfigFakeWhatsAppSender:
+    def __init__(self, config):
+        self.config = config
+        self.close_count = 0
+
+    def close(self):
+        self.close_count += 1
+
+
 class TestNotificationFlow(unittest.TestCase):
     def setUp(self):
         logging.disable(logging.CRITICAL)
@@ -167,6 +190,177 @@ class TestNotificationFlow(unittest.TestCase):
         )
         sender.logger = logging.getLogger('test_email_notification_sender')
         return sender
+
+    def write_runtime_env(self, env_path, **overrides):
+        values = {
+            'EMAIL_HOST': 'imap.gmail.com',
+            'EMAIL_PORT': '993',
+            'EMAIL_USERNAME': 'source@example.com',
+            'EMAIL_PASSWORD': 'email-password',
+            'NOTIFY_EMAIL_RECIPIENTS': 'recipient@example.com',
+            'WHATSAPP_PHONE_NUMBER': '+1234567890',
+            'WHATSAPP_GROUP_INVITE_CODE': '',
+            'WHATSAPP_MESSAGE_HEADER': 'Upwork Alert',
+            'EMAIL_NOTIFICATION_SUBJECT_PREFIX': 'Upwork Alert',
+            'EMAIL_NOTIFICATION_BODY_INTRO': (
+                'New Upwork alert matched your notification rule.'
+            ),
+            'CHECK_INTERVAL_MINUTES': '5',
+            'CONFIG_RELOAD_INTERVAL_SECONDS': '60',
+            'MAX_EMAILS_PER_CHECK': '3',
+            'KEYWORDS_TO_MONITOR': 'alert,message',
+            'MONITOR_SPECIFIC_SENDERS': '',
+            'NOTIFICATION_STATE_FILE': os.path.join(
+                os.path.dirname(env_path),
+                'notification_state.json',
+            ),
+        }
+        values.update(overrides)
+        with open(env_path, 'w', encoding='utf-8') as env_file:
+            for key, value in values.items():
+                env_file.write(f"{key}={value}\n")
+
+    def make_runtime_notifier(self, runtime_config):
+        notifier = EmailToWhatsAppNotifier.__new__(EmailToWhatsAppNotifier)
+        notifier.config = runtime_config
+        notifier.email_monitor = RuntimeConfigFakeEmailMonitor(runtime_config)
+        notifier.email_sender = RuntimeConfigFakeEmailSender(runtime_config)
+        notifier.whatsapp_sender = RuntimeConfigFakeWhatsAppSender(runtime_config)
+        notifier.notification_state = self.make_state()
+        notifier.logger = logging.getLogger('test_runtime_config_reload')
+        return notifier
+
+    def test_runtime_config_reads_env_file_values(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        self.write_runtime_env(
+            env_path,
+            WHATSAPP_MESSAGE_HEADER='Initial Alert',
+            CONFIG_RELOAD_INTERVAL_SECONDS='90',
+            KEYWORDS_TO_MONITOR='alpha,beta',
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+
+        self.assertEqual(runtime_config.WHATSAPP_MESSAGE_HEADER, 'Initial Alert')
+        self.assertEqual(runtime_config.CONFIG_RELOAD_INTERVAL_SECONDS, 90)
+        self.assertEqual(runtime_config.KEYWORDS_TO_MONITOR, ['alpha', 'beta'])
+
+    def test_runtime_config_reload_applies_changed_live_values(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        self.write_runtime_env(env_path)
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+            notifier = self.make_runtime_notifier(runtime_config)
+            self.write_runtime_env(
+                env_path,
+                WHATSAPP_MESSAGE_HEADER='Updated Alert',
+                EMAIL_NOTIFICATION_SUBJECT_PREFIX='Updated Subject',
+                EMAIL_NOTIFICATION_BODY_INTRO='Updated intro.',
+                NOTIFY_EMAIL_RECIPIENTS='one@example.com,two@example.com',
+                CHECK_INTERVAL_MINUTES='2',
+                CONFIG_RELOAD_INTERVAL_SECONDS='120',
+                MAX_EMAILS_PER_CHECK='7',
+                KEYWORDS_TO_MONITOR='upwork,proposal',
+            )
+
+            changed_keys = notifier.reload_runtime_config(force=True)
+
+        self.assertIn('WHATSAPP_MESSAGE_HEADER', changed_keys)
+        self.assertIn('EMAIL_NOTIFICATION_SUBJECT_PREFIX', changed_keys)
+        self.assertIn('NOTIFY_EMAIL_RECIPIENTS', changed_keys)
+        self.assertEqual(notifier.config.WHATSAPP_MESSAGE_HEADER, 'Updated Alert')
+        self.assertEqual(notifier.config.EMAIL_NOTIFICATION_SUBJECT_PREFIX, 'Updated Subject')
+        self.assertEqual(notifier.config.EMAIL_NOTIFICATION_BODY_INTRO, 'Updated intro.')
+        self.assertEqual(
+            notifier.config.NOTIFY_EMAIL_RECIPIENTS,
+            ['one@example.com', 'two@example.com'],
+        )
+        self.assertEqual(notifier.config.CHECK_INTERVAL_MINUTES, 2)
+        self.assertEqual(notifier.config.CONFIG_RELOAD_INTERVAL_SECONDS, 120)
+        self.assertEqual(notifier.config.MAX_EMAILS_PER_CHECK, 7)
+        self.assertEqual(notifier.config.KEYWORDS_TO_MONITOR, ['upwork', 'proposal'])
+        self.assertIs(notifier.email_monitor.config, notifier.config)
+        self.assertIs(notifier.email_sender.config, notifier.config)
+        self.assertIs(notifier.whatsapp_sender.config, notifier.config)
+
+    def test_runtime_config_reload_keeps_previous_config_when_invalid(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        self.write_runtime_env(env_path, WHATSAPP_MESSAGE_HEADER='Stable Alert')
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+            notifier = self.make_runtime_notifier(runtime_config)
+            self.write_runtime_env(
+                env_path,
+                EMAIL_PASSWORD='',
+                WHATSAPP_MESSAGE_HEADER='Broken Alert',
+            )
+
+            changed_keys = notifier.reload_runtime_config(force=True)
+
+        self.assertEqual(changed_keys, set())
+        self.assertEqual(notifier.config.WHATSAPP_MESSAGE_HEADER, 'Stable Alert')
+        self.assertEqual(notifier.config.EMAIL_PASSWORD, 'email-password')
+
+    def test_runtime_config_reload_resets_affected_connections(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        self.write_runtime_env(env_path)
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+            notifier = self.make_runtime_notifier(runtime_config)
+            self.write_runtime_env(
+                env_path,
+                EMAIL_HOST='imap2.example.com',
+                WHATSAPP_HEADLESS='true',
+            )
+
+            changed_keys = notifier.reload_runtime_config(force=True)
+
+        self.assertIn('EMAIL_HOST', changed_keys)
+        self.assertIn('WHATSAPP_HEADLESS', changed_keys)
+        self.assertEqual(notifier.email_monitor.disconnect_count, 1)
+        self.assertEqual(notifier.whatsapp_sender.close_count, 1)
+
+    def test_runtime_config_reload_defers_state_file_changes_until_restart(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        original_state_path = os.path.join(temp_dir.name, 'state-one.json')
+        next_state_path = os.path.join(temp_dir.name, 'state-two.json')
+        self.write_runtime_env(env_path, NOTIFICATION_STATE_FILE=original_state_path)
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+            notifier = self.make_runtime_notifier(runtime_config)
+            self.write_runtime_env(env_path, NOTIFICATION_STATE_FILE=next_state_path)
+
+            changed_keys = notifier.reload_runtime_config(force=True)
+
+        self.assertNotIn('NOTIFICATION_STATE_FILE', changed_keys)
+        self.assertEqual(notifier.config.NOTIFICATION_STATE_FILE, original_state_path)
+
+    def test_scheduler_interval_helpers_use_current_config_values(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        env_path = os.path.join(temp_dir.name, '.env')
+        self.write_runtime_env(env_path, CHECK_INTERVAL_MINUTES='0.5')
+
+        with patch.dict(os.environ, {}, clear=True):
+            runtime_config = config.Config(env_path=env_path)
+            notifier = self.make_runtime_notifier(runtime_config)
+
+        self.assertEqual(notifier._check_interval_seconds(), 30)
 
     def test_email_notification_is_sent_before_whatsapp(self):
         email = {
@@ -282,6 +476,54 @@ class TestNotificationFlow(unittest.TestCase):
         self.assertTrue(state.has_email_sent('456'))
         self.assertEqual(state.get('456')['status'], 'queued')
         self.assertEqual(state.get('456')['attempt_count'], 2)
+
+    def test_due_whatsapp_retry_uses_current_message_formatter(self):
+        email = {
+            'id': '654',
+            'subject': 'Pending retry',
+            'sender': 'sender@example.com',
+            'date': 'Wed, 03 Jun 2026 09:00:00 +0000',
+            'body': 'Body',
+        }
+        state = self.make_state()
+        state.record_email_sent(email, 'Old Header: Pending retry')
+
+        class DynamicWhatsAppSender(FakeWhatsAppSender):
+            def __init__(self):
+                super().__init__(send_results=True)
+                self.config = type(
+                    'DynamicConfig',
+                    (),
+                    {'WHATSAPP_MESSAGE_HEADER': 'Current Header'},
+                )
+
+            def format_email_message(self, email_data):
+                return (
+                    f"{self.config.WHATSAPP_MESSAGE_HEADER}: "
+                    f"{email_data['subject']}"
+                )
+
+        notifier = self.make_notifier(
+            FakeEmailMonitor([]),
+            DynamicWhatsAppSender(),
+            notification_state=state,
+            config=type(
+                'TestConfig',
+                (),
+                {
+                    'WHATSAPP_MAX_RETRIES': 3,
+                    'WHATSAPP_RETRY_DELAY_SECONDS': 0,
+                    'NOTIFICATION_DELAY_SECONDS': 0,
+                },
+            ),
+        )
+
+        notifier.process_due_whatsapp_retries()
+
+        self.assertEqual(
+            notifier.whatsapp_sender.sent_messages,
+            ['Current Header: Pending retry'],
+        )
 
     def test_whatsapp_success_marks_email_as_seen(self):
         email = {

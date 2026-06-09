@@ -5,20 +5,24 @@ Monitors email inbox and sends WhatsApp notifications for new emails
 """
 
 import time
-import schedule
 import logging
 from email_monitor import EmailMonitor
 from email_notification_sender import EmailNotificationSender
 from notification_state import NotificationState
 from whatsapp_sender import WhatsAppSender
-from config import Config
+from config import (
+    Config,
+    IMAP_CONNECTION_CONFIG_KEYS,
+    RESTART_REQUIRED_CONFIG_KEYS,
+    WHATSAPP_DRIVER_CONFIG_KEYS,
+)
 
 class EmailToWhatsAppNotifier:
     def __init__(self):
-        self.email_monitor = EmailMonitor()
-        self.email_sender = EmailNotificationSender()
-        self.whatsapp_sender = WhatsAppSender()
         self.config = Config()
+        self.email_monitor = EmailMonitor(self.config)
+        self.email_sender = EmailNotificationSender(self.config)
+        self.whatsapp_sender = WhatsAppSender(self.config)
         self.notification_state = NotificationState(self.config.NOTIFICATION_STATE_FILE)
         
         # Set up logging
@@ -43,6 +47,103 @@ class EmailToWhatsAppNotifier:
         except ValueError as e:
             self.logger.error(f"Configuration validation failed: {str(e)}")
             return False
+
+    def reload_runtime_config(self, force: bool = False):
+        """Reload .env changes into the running notifier when the file changes."""
+        if not force and not self.config.env_file_changed():
+            return set()
+
+        previous_config = self.config
+
+        try:
+            candidate_config = previous_config.reload()
+            candidate_config.validate_config()
+            self._validate_whatsapp_target(candidate_config)
+        except ValueError as e:
+            self.logger.error(
+                "Configuration reload failed; keeping current config: %s",
+                str(e),
+            )
+            return set()
+        except Exception as e:
+            self.logger.error(
+                "Unexpected configuration reload error; keeping current config: %s",
+                str(e),
+            )
+            return set()
+
+        changed_keys = previous_config.changed_keys(candidate_config)
+        restart_required_keys = changed_keys & RESTART_REQUIRED_CONFIG_KEYS
+        if restart_required_keys:
+            for key in restart_required_keys:
+                setattr(candidate_config, key, getattr(previous_config, key))
+            changed_keys -= restart_required_keys
+            self.logger.warning(
+                "Restart required to apply config changes: %s",
+                ', '.join(sorted(restart_required_keys)),
+            )
+
+        self._apply_runtime_config(previous_config, candidate_config, changed_keys)
+        self._log_config_reload(changed_keys)
+        return changed_keys
+
+    def _apply_runtime_config(self, previous_config, candidate_config, changed_keys):
+        """Swap in the new config and reset resources affected by changed keys."""
+        imap_settings_changed = bool(changed_keys & IMAP_CONNECTION_CONFIG_KEYS)
+        whatsapp_driver_settings_changed = bool(
+            changed_keys & WHATSAPP_DRIVER_CONFIG_KEYS
+        )
+
+        self.config = candidate_config
+        self.email_monitor.config = candidate_config
+        self.email_sender.config = candidate_config
+        self.whatsapp_sender.config = candidate_config
+
+        if imap_settings_changed:
+            self.logger.info("IMAP settings changed; reconnecting on next email scan")
+            self.email_monitor.disconnect_from_email()
+
+        if whatsapp_driver_settings_changed:
+            self.logger.info(
+                "WhatsApp browser settings changed; reopening browser on next send"
+            )
+            self.whatsapp_sender.close()
+
+    def _log_config_reload(self, changed_keys):
+        if not changed_keys:
+            return
+
+        safe_keys = Config.safe_changed_keys(changed_keys)
+        secret_count = len(changed_keys) - len(safe_keys)
+
+        if safe_keys:
+            self.logger.info(
+                "Reloaded .env config changes: %s",
+                ', '.join(safe_keys),
+            )
+
+        if secret_count:
+            self.logger.info(
+                "Reloaded .env config changes for %s secret value(s)",
+                secret_count,
+            )
+
+    @staticmethod
+    def _validate_whatsapp_target(config):
+        if config.WHATSAPP_GROUP_INVITE_CODE:
+            return True
+
+        phone = config.WHATSAPP_PHONE_NUMBER
+        if not phone:
+            raise ValueError(
+                "Missing required configuration: WHATSAPP_PHONE_NUMBER or "
+                "WHATSAPP_GROUP_INVITE_CODE"
+            )
+
+        if not phone.startswith('+') or not phone[1:].replace(' ', '').isdigit():
+            raise ValueError(f"Invalid WHATSAPP_PHONE_NUMBER format: {phone}")
+
+        return True
     
     def check_emails_and_notify(self):
         """Check for new emails, send email first, then WhatsApp."""
@@ -111,8 +212,13 @@ class EmailToWhatsAppNotifier:
 
         for entry in due_notifications:
             email_data = entry.get('email_data')
-            message = entry.get('message')
-            if not email_data or not message:
+            if not email_data:
+                continue
+
+            message = self.whatsapp_sender.format_email_message(email_data)
+            if not message:
+                message = entry.get('message')
+            if not message:
                 continue
 
             self.attempt_whatsapp_notification(email_data, message)
@@ -178,6 +284,7 @@ class EmailToWhatsAppNotifier:
     
     def run_once(self):
         """Run the email check once"""
+        self.reload_runtime_config(force=True)
         if not self.validate_configuration():
             self.logger.error("Configuration validation failed. Please check your .env file.")
             return False
@@ -192,29 +299,70 @@ class EmailToWhatsAppNotifier:
     
     def run_scheduler(self):
         """Run the email checker on a schedule"""
+        self.reload_runtime_config(force=True)
         if not self.validate_configuration():
             self.logger.error("Configuration validation failed. Please check your .env file.")
             return
-        
-        # Schedule the email check
-        schedule.every(self.config.CHECK_INTERVAL_MINUTES).minutes.do(self.check_emails_and_notify)
-        
+
         self.logger.info(f"Email notification system started. Checking every {self.config.CHECK_INTERVAL_MINUTES} minutes.")
+        self.logger.info(
+            "Checking .env for updates every %s seconds.",
+            self.config.CONFIG_RELOAD_INTERVAL_SECONDS,
+        )
         self.logger.info("Press Ctrl+C to stop the system.")
         
         # Run the first check immediately
         self.check_emails_and_notify()
+        next_email_check_at = time.monotonic() + self._check_interval_seconds()
+        next_config_reload_at = (
+            time.monotonic() + self.config.CONFIG_RELOAD_INTERVAL_SECONDS
+        )
         
-        # Keep the scheduler running
         try:
             while True:
-                schedule.run_pending()
-                time.sleep(1)
+                now = time.monotonic()
+
+                if now >= next_config_reload_at:
+                    changed_keys = self.reload_runtime_config()
+                    if 'CHECK_INTERVAL_MINUTES' in changed_keys:
+                        next_email_check_at = (
+                            time.monotonic() + self._check_interval_seconds()
+                        )
+                        self.logger.info(
+                            "Email check interval updated to %s minutes",
+                            self.config.CHECK_INTERVAL_MINUTES,
+                        )
+
+                    next_config_reload_at = (
+                        time.monotonic() + self.config.CONFIG_RELOAD_INTERVAL_SECONDS
+                    )
+
+                if now >= next_email_check_at:
+                    self.check_emails_and_notify()
+                    next_email_check_at = time.monotonic() + self._check_interval_seconds()
+
+                time.sleep(
+                    self._scheduler_sleep_seconds(
+                        next_email_check_at,
+                        next_config_reload_at,
+                    )
+                )
         except KeyboardInterrupt:
             self.logger.info("Email notification system stopped by user")
         finally:
             self.email_monitor.disconnect_from_email()
             self.whatsapp_sender.close()
+
+    def _check_interval_seconds(self) -> float:
+        return max(float(self.config.CHECK_INTERVAL_MINUTES) * 60, 0.1)
+
+    @staticmethod
+    def _scheduler_sleep_seconds(next_email_check_at, next_config_reload_at) -> float:
+        seconds_until_next_event = min(
+            next_email_check_at,
+            next_config_reload_at,
+        ) - time.monotonic()
+        return max(0.1, min(1, seconds_until_next_event))
 
 def main():
     """Main function"""

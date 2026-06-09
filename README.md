@@ -13,6 +13,7 @@ A Python application that monitors your Gmail inbox, sends email notifications f
 - 🛡️ **Delivery-aware Read Handling**: Uses BODY.PEEK while checking emails, then marks matching emails as read after WhatsApp succeeds or exhausts retries
 - 🔁 **Retry State**: Stores WhatsApp retry state in `notification_state.json` so notification emails are not duplicated
 - ⚙️ **Easy Configuration**: Environment-based configuration with .env file
+- ♻️ **Throttled Hot Reload**: Picks up most `.env` changes while running, checking the file every 60 seconds by default
 
 ## Prerequisites
 
@@ -70,6 +71,7 @@ A Python application that monitors your Gmail inbox, sends email notifications f
 
    # Monitoring Settings
    CHECK_INTERVAL_MINUTES=0.083  # 5 seconds for real-time monitoring
+   CONFIG_RELOAD_INTERVAL_SECONDS=60  # How often to check .env for changes
    MAX_EMAILS_PER_CHECK=3  # Maximum unread emails to process per check
    EMAIL_SCAN_MULTIPLIER=5  # Scan a wider unread window before applying filters
    NOTIFICATION_DELAY_SECONDS=2
@@ -115,6 +117,7 @@ For Gmail users, you need to:
 | `WHATSAPP_DEBUG_SCREENSHOT_DIR` | Directory for headless failure screenshots; leave empty to disable | `debug_screenshots` |
 | `WHATSAPP_MESSAGE_HEADER` | First line/title of each WhatsApp notification | `Upwork Alert` |
 | `CHECK_INTERVAL_MINUTES` | How often to check for emails (supports decimals) | `0.083` (5 seconds) |
+| `CONFIG_RELOAD_INTERVAL_SECONDS` | How often the running app checks `.env` for changes | `60` |
 | `MAX_EMAILS_PER_CHECK` | Maximum number of unread emails to process in one check | `3` |
 | `EMAIL_SCAN_MULTIPLIER` | How many more unread candidates to scan before filtering | `5` |
 | `NOTIFICATION_DELAY_SECONDS` | Delay between notification attempts | `2` |
@@ -151,7 +154,14 @@ python main.py --once
    - Subject line
    - Body preview (first 150 characters)
 7. **Retry-aware Read-state Update**: Marks matching emails as read after WhatsApp succeeds or exhausts configured retries
-8. **Continuous Monitoring**: Repeats every 5 seconds (configurable) for real-time alerts
+8. **Throttled Config Reload**: Checks `.env` every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds and applies changed message text, filters, recipients, limits, and intervals without restart
+9. **Continuous Monitoring**: Repeats every `CHECK_INTERVAL_MINUTES` minutes (configurable) for real-time alerts
+
+## Runtime Configuration Reloads
+
+While `python main.py` is running, the app checks `.env` for updates every `CONFIG_RELOAD_INTERVAL_SECONDS` seconds. Changes to message headers, email subject/body text, recipients, keywords, sender filters, check interval, batch size, retry timing, SMTP settings, and most WhatsApp settings apply after the next reload check.
+
+If IMAP settings change, the current email connection is closed and the next scan reconnects. If Chrome/profile/headless settings change, the current WhatsApp browser is closed and the next WhatsApp send opens a new browser with the updated settings. `NOTIFICATION_STATE_FILE` is intentionally restart-only so pending retry state is not split across files.
 
 ## WhatsApp Integration Notes
 
